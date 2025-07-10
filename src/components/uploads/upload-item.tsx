@@ -1,6 +1,7 @@
 import { X, Play, Music, Pause } from "lucide-react";
 import { useRef, useState, useEffect } from "react";
 import { IUpload } from "@/interfaces/editor";
+import { API_CONFIG } from "@/config/api";
 
 // Helper function to determine file type
 const getFileType = (filename: string): 'video' | 'image' | 'audio' => {
@@ -37,6 +38,24 @@ interface UploadItemProps {
   onRemove: () => void;
 }
 
+// Helper function to extract file path from URL for deletion
+const getFilePathFromUrl = (url: string): string => {
+  try {
+    const urlObj = new URL(url);
+    // Extract path after /api/v1/editor/files/
+    const pathMatch = urlObj.pathname.match(/\/api\/v1\/editor\/files\/(.+)/);
+    return pathMatch ? pathMatch[1] : '';
+  } catch {
+    // If URL parsing fails, try to extract from the end of the URL
+    const parts = url.split('/');
+    const folderIndex = parts.findIndex(part => part === 'files');
+    if (folderIndex !== -1 && folderIndex < parts.length - 1) {
+      return parts.slice(folderIndex + 1).join('/');
+    }
+    return '';
+  }
+};
+
 export const UploadItem = ({ upload, onAddToTimeline, onRemove }: UploadItemProps) => {
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -47,6 +66,7 @@ export const UploadItem = ({ upload, onAddToTimeline, onRemove }: UploadItemProp
   const [audioDuration, setAudioDuration] = useState<number | null>(null);
   const [audioCurrentTime, setAudioCurrentTime] = useState(0);
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const thumbnailVideoRef = useRef<HTMLVideoElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -139,6 +159,50 @@ export const UploadItem = ({ upload, onAddToTimeline, onRemove }: UploadItemProp
     if (isPlaying && videoRef.current) {
       videoRef.current.pause();
       setIsPlaying(false);
+    }
+  };
+
+  const handleRemoveFile = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+
+    if (isDeleting) return; // Prevent multiple delete requests
+
+    setIsDeleting(true);
+
+    try {
+      // Extract file path from URL
+      const filePath = getFilePathFromUrl(upload.url);
+
+      if (!filePath) {
+        throw new Error('Could not extract file path from URL');
+      }
+
+      // Make DELETE request to server
+      const response = await fetch(`${API_CONFIG.UPLOAD_API_URL}/files/${filePath}`, {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+      });
+
+      if (!response.ok) {
+        throw new Error(`Failed to delete file: ${response.statusText}`);
+      }
+
+      const result = await response.json();
+
+      if (result.success) {
+        // Call the onRemove callback to update the UI
+        onRemove();
+      } else {
+        throw new Error(result.message || 'Failed to delete file');
+      }
+    } catch (error) {
+      console.error('Error deleting file:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Failed to delete file. Please try again.';
+      alert(errorMessage);
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -355,14 +419,20 @@ export const UploadItem = ({ upload, onAddToTimeline, onRemove }: UploadItemProp
             </button>
           )} */}
           <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onRemove();
-            }}
-            className="bg-red-500 hover:bg-red-600 text-white rounded-full p-1 transition-colors shadow-lg"
-            title="Remove file"
+            onClick={handleRemoveFile}
+            disabled={isDeleting}
+            className={`${
+              isDeleting
+                ? 'bg-gray-500 cursor-not-allowed'
+                : 'bg-red-500 hover:bg-red-600'
+            } text-white rounded-full p-1 transition-colors shadow-lg`}
+            title={isDeleting ? "Deleting..." : "Remove file"}
           >
-            <X size={12} />
+            {isDeleting ? (
+              <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin"></div>
+            ) : (
+              <X size={12} />
+            )}
           </button>
         </div>
       </div>
