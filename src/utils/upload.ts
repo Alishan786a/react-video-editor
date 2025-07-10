@@ -1,29 +1,62 @@
-import { generateId } from "@designcombo/timeline";
-
-const BASE_URL = "https://transcribe.designcombo.dev/presigned-url";
+import { API_ENDPOINTS } from "@/config/api";
 
 interface IUploadDetails {
   uploadUrl: string;
   url: string;
   name: string;
   id: string;
+  originalFileName: string;
+  folder: string;
+  uploadMethod: string;
+  uploadHeaders: Record<string, string>;
 }
+
+interface IUploadResponse {
+  success: boolean;
+  presigned_url: string;
+  url: string;
+  id: string;
+  fileName: string;
+  originalFileName: string;
+  folder: string;
+  uploadMethod: string;
+  uploadHeaders: Record<string, string>;
+  error?: string;
+}
+
 export const createUploadsDetails = async (
   fileName: string
 ): Promise<IUploadDetails> => {
-  const currentFormat = fileName.split(".").pop();
-  const uniqueFileName = `${generateId()}`;
-  const updatedFileName = `${uniqueFileName}.${currentFormat}`;
-  const response = await fetch(BASE_URL, {
+  const response = await fetch(API_ENDPOINTS.PRESIGNED_URL, {
     method: "POST",
-    body: JSON.stringify({ fileName: updatedFileName })
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ fileName })
   });
 
-  const data = await response.json();
+  if (!response.ok) {
+    throw new Error(`Failed to get upload URL: ${response.statusText}`);
+  }
+
+  const data: IUploadResponse = await response.json();
+
+  if (!data.success) {
+    throw new Error(data.error || 'Failed to get upload URL');
+  }
+
+  if (!data.presigned_url || !data.url) {
+    throw new Error('Invalid response from upload service');
+  }
+
   return {
-    uploadUrl: data.presigned_url as string,
-    url: data.url as string,
-    name: updatedFileName,
-    id: uniqueFileName
+    uploadUrl: data.presigned_url,
+    url: data.url,
+    name: data.fileName,
+    id: data.id,
+    originalFileName: data.originalFileName,
+    folder: data.folder,
+    uploadMethod: data.uploadMethod,
+    uploadHeaders: data.uploadHeaders
   };
 };
