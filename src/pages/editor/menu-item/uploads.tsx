@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { UploadIcon, X, Play, Music, Image as ImageIcon } from "lucide-react";
+import { UploadIcon, X, Play, Music, Image as ImageIcon, Pause } from "lucide-react";
 import { useRef, useState, useEffect } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import useDataState from "@/store/use-data-state";
@@ -12,11 +12,14 @@ import { generateId } from "@designcombo/timeline";
 // Helper function to determine file type
 const getFileType = (filename: string): 'video' | 'image' | 'audio' => {
   const extension = filename.split('.').pop()?.toLowerCase();
-  if (['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(extension || '')) {
+  if (['mp4', 'mov', 'avi', 'mkv', 'webm', 'flv', '3gp'].includes(extension || '')) {
     return 'video';
-  } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(extension || '')) {
+  } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'tiff'].includes(extension || '')) {
     return 'image';
+  } else if (['mp3', 'wav', 'ogg', 'm4a', 'aac', 'flac', 'wma', 'opus'].includes(extension || '')) {
+    return 'audio';
   } else {
+    // Default to audio for unknown extensions, but this could be changed
     return 'audio';
   }
 };
@@ -101,7 +104,9 @@ export const Uploads = () => {
         fileId: uploadDetails.id,
         previewUrl: uploadResult.url || uploadDetails.url,
         url: uploadResult.url || uploadDetails.url,
-        previewData: file.type.startsWith('image/') ? URL.createObjectURL(file) : undefined,
+        previewData: (file.type.startsWith('image/') || file.type.startsWith('audio/') || file.type.startsWith('video/'))
+          ? URL.createObjectURL(file)
+          : undefined,
       };
 
       // Add to uploads store
@@ -252,28 +257,35 @@ const UploadItem = ({
   const [isLoading, setIsLoading] = useState(false);
   const [isPlaying, setIsPlaying] = useState(false);
   const [showVideoPreview, setShowVideoPreview] = useState(false);
+  const [showAudioPreview, setShowAudioPreview] = useState(false);
   const [videoDuration, setVideoDuration] = useState<number | null>(null);
+  const [audioDuration, setAudioDuration] = useState<number | null>(null);
+  const [audioCurrentTime, setAudioCurrentTime] = useState(0);
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const thumbnailVideoRef = useRef<HTMLVideoElement>(null);
+  const audioRef = useRef<HTMLAudioElement>(null);
+  const thumbnailAudioRef = useRef<HTMLAudioElement>(null);
 
   const fileType = getFileType(upload.originalName);
   const isImage = fileType === 'image';
   const isVideo = fileType === 'video';
+  const isAudio = fileType === 'audio';
 
-  // Generate preview for images and videos
+  // Generate preview for images, videos, and audio
   useEffect(() => {
     if (upload.previewData) {
       // Use the blob URL created during upload for immediate preview
       setPreviewUrl(upload.previewData);
-    } else if (isImage || isVideo) {
-      // For images and videos, use the uploaded file URL as preview
+    } else if (isImage || isVideo || isAudio) {
+      // For images, videos, and audio, use the uploaded file URL as preview
       setIsLoading(true);
       setPreviewUrl(upload.url);
     } else {
-      // For audio and other files, no preview
+      // For other files, no preview
       setPreviewUrl(null);
     }
-  }, [upload, isImage, isVideo]);
+  }, [upload, isImage, isVideo, isAudio]);
 
   const handleMediaLoad = () => {
     setIsLoading(false);
@@ -287,6 +299,45 @@ const UploadItem = ({
   const handleVideoLoadedMetadata = () => {
     if (thumbnailVideoRef.current) {
       setVideoDuration(thumbnailVideoRef.current.duration);
+    }
+  };
+
+  const handleAudioLoadedMetadata = () => {
+    if (thumbnailAudioRef.current) {
+      setAudioDuration(thumbnailAudioRef.current.duration);
+    }
+  };
+
+  const handleAudioTimeUpdate = () => {
+    if (audioRef.current) {
+      setAudioCurrentTime(audioRef.current.currentTime);
+    }
+  };
+
+  const handleAudioEnded = () => {
+    setIsAudioPlaying(false);
+    setAudioCurrentTime(0);
+  };
+
+  const toggleAudioPlayback = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (audioRef.current) {
+      if (isAudioPlaying) {
+        audioRef.current.pause();
+        setIsAudioPlaying(false);
+      } else {
+        audioRef.current.play();
+        setIsAudioPlaying(true);
+      }
+    }
+  };
+
+  const toggleAudioPreview = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setShowAudioPreview(!showAudioPreview);
+    if (isAudioPlaying && audioRef.current) {
+      audioRef.current.pause();
+      setIsAudioPlaying(false);
     }
   };
 
@@ -311,15 +362,18 @@ const UploadItem = ({
     }
   };
 
-  // Handle keyboard events for video preview modal
+  // Handle keyboard events for preview modals
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (showVideoPreview && e.key === 'Escape') {
         toggleVideoPreview();
       }
+      if (showAudioPreview && e.key === 'Escape') {
+        toggleAudioPreview();
+      }
     };
 
-    if (showVideoPreview) {
+    if (showVideoPreview || showAudioPreview) {
       document.addEventListener('keydown', handleKeyDown);
       document.body.style.overflow = 'hidden'; // Prevent background scrolling
     }
@@ -328,7 +382,7 @@ const UploadItem = ({
       document.removeEventListener('keydown', handleKeyDown);
       document.body.style.overflow = 'unset';
     };
-  }, [showVideoPreview]);
+  }, [showVideoPreview, showAudioPreview]);
 
   return (
     <div className="relative group bg-background border rounded-md overflow-hidden transition-colors">
@@ -351,6 +405,62 @@ const UploadItem = ({
               className="absolute top-2 right-2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 transition-colors"
             >
               <X size={20} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Audio Preview Modal */}
+      {showAudioPreview && isAudio && (previewUrl || upload.url) && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50" onClick={toggleAudioPreview}>
+          <div className="relative bg-background rounded-lg p-6 max-w-md w-full mx-4" onClick={(e) => e.stopPropagation()}>
+            <div className="text-center">
+              <div className="mb-4">
+                <Music size={48} className="mx-auto text-primary mb-2" />
+                <h3 className="text-lg font-medium text-text-primary">{upload.originalName}</h3>
+              </div>
+
+              <audio
+                ref={audioRef}
+                src={previewUrl || upload.url}
+                onTimeUpdate={handleAudioTimeUpdate}
+                onEnded={handleAudioEnded}
+                onLoadedMetadata={handleAudioLoadedMetadata}
+                className="hidden"
+              />
+
+              <div className="space-y-4">
+                {/* Progress Bar */}
+                {audioDuration && (
+                  <div className="space-y-2">
+                    <div className="w-full bg-secondary rounded-full h-2">
+                      <div
+                        className="bg-primary h-2 rounded-full transition-all duration-100"
+                        style={{ width: `${(audioCurrentTime / audioDuration) * 100}%` }}
+                      />
+                    </div>
+                    <div className="flex justify-between text-xs text-muted-foreground">
+                      <span>{formatDuration(audioCurrentTime)}</span>
+                      <span>{formatDuration(audioDuration)}</span>
+                    </div>
+                  </div>
+                )}
+
+                {/* Play/Pause Button */}
+                <button
+                  onClick={toggleAudioPlayback}
+                  className="bg-primary hover:bg-primary/90 text-primary-foreground rounded-full p-3 transition-colors"
+                >
+                  {isAudioPlaying ? <Pause size={24} /> : <Play size={24} />}
+                </button>
+              </div>
+            </div>
+
+            <button
+              onClick={toggleAudioPreview}
+              className="absolute top-2 right-2 bg-secondary hover:bg-secondary/80 text-foreground rounded-full p-1 transition-colors"
+            >
+              <X size={16} />
             </button>
           </div>
         </div>
@@ -382,10 +492,10 @@ const UploadItem = ({
                       onError={handleMediaError}
                       style={{ display: isLoading ? 'none' : 'block' }}
                     />
-                    <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/20"   >
                       <div className="flex flex-col items-center gap-1">
-                        <Play size={20} className="text-white drop-shadow-lg" />
-                        <span className="text-xs text-white drop-shadow-lg">Preview</span>
+                        <Play size={20} className="text-white drop-shadow-lg" onClick={toggleVideoPreview}/>
+                     
                       </div>
                     </div>
                     {videoDuration && (
@@ -406,12 +516,38 @@ const UploadItem = ({
                 )}
               </>
             ) : (
-              <div className="flex flex-col items-center justify-center text-muted-foreground">
+              <div className="flex flex-col items-center justify-center text-muted-foreground relative">
                 {getFileIcon(upload.originalName)}
                 <span className="text-xs mt-1 capitalize">{fileType}</span>
+                {isAudio && audioDuration && (
+                  <span className="text-xs text-muted-foreground">
+                    {formatDuration(audioDuration)}
+                  </span>
+                )}
+                {/* Audio play button overlay */}
+                {isAudio && (
+                  <div
+                    
+                    className="absolute inset-0 flex items-center justify-center   rounded-sm transition-colors opacity-0 group-hover:opacity-100"
+                    title="Play audio"
+                  >
+                    <Play size={20} className="text-white " onClick={toggleAudioPreview}/>
+                  </div>
+                )}
               </div>
             )}
           </div>
+
+          {/* Hidden audio element for metadata loading */}
+          {isAudio && (previewUrl || upload.url) && (
+            <audio
+              ref={thumbnailAudioRef}
+              src={previewUrl || upload.url}
+              onLoadedMetadata={handleAudioLoadedMetadata}
+              className="hidden"
+            />
+          )}
+
           <div className="text-xs text-text-primary truncate" title={upload.originalName}>
             {upload.originalName}
           </div>
@@ -421,27 +557,7 @@ const UploadItem = ({
         </div>
 
         {/* Action Buttons */}
-        <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-          {isVideo && previewUrl && (
-            <button
-              onClick={toggleVideoPreview}
-              className="bg-blue-500 hover:bg-blue-600 text-white rounded-full p-1 transition-colors"
-              title="Preview video"
-            >
-              <Play size={12} />
-            </button>
-          )}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onRemove();
-            }}
-            className="bg-red-500 hover:bg-red-600 text-white rounded-full p-1 transition-colors"
-            title="Remove file"
-          >
-            <X size={12} />
-          </button>
-        </div>
+      
       </div>
     </div>
   );
