@@ -218,47 +218,55 @@ app.get('/api/v1/editor/files/:folder/:filename', (req, res) => {
 });
 
 // Optional: Video rendering endpoint (placeholder)
-app.post('/api/render', async (req, res) => {
+app.post('/api/v1/editor/render', async (req, res) => {
   try {
     const projectData = req.body;
     const renderId = uuidv4();
-    
+
     // TODO: Implement video rendering logic here
     // This could involve:
     // 1. Processing the project data
     // 2. Using FFmpeg or similar to render video
     // 3. Uploading rendered video to storage
     // 4. Updating render status
-    
+
     console.log('Render request received:', { renderId, projectData });
-    
+
     res.json({
+      success: true,
       renderId: renderId,
-      status: 'processing'
+      status: 'processing',
+      message: 'Render job started successfully'
     });
-    
+
   } catch (error) {
     console.error('Error starting render:', error);
-    res.status(500).json({ error: 'Failed to start render' });
+    res.status(500).json({
+      success: false,
+      error: 'Failed to start render'
+    });
   }
 });
 
 // Optional: Check render status (placeholder)
-app.get('/api/render/status/:renderId', async (req, res) => {
+app.get('/api/v1/editor/render/status/:renderId', async (req, res) => {
   try {
     const { renderId } = req.params;
-    
+
     // TODO: Implement render status checking
     // This would typically check a database or job queue
-    
+
+    // For demo purposes, create a mock video file URL
+    const mockVideoUrl = `http://localhost:3000/api/v1/editor/files/renders/${renderId}.mp4`;
+
     res.json({
       render: {
         progress: 100, // Placeholder - always complete
         status: 'completed',
-        output: `https://${BUCKET_NAME}.s3.amazonaws.com/renders/${renderId}.mp4`
+        output: mockVideoUrl
       }
     });
-    
+
   } catch (error) {
     console.error('Error checking render status:', error);
     res.status(500).json({ error: 'Failed to check render status' });
