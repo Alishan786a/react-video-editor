@@ -1,13 +1,42 @@
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { UploadIcon, X, Play, Music, Image as ImageIcon } from "lucide-react";
-import { useRef, useState } from "react";
+import { useRef, useState, useEffect } from "react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import useDataState from "@/store/use-data-state";
 import { createUploadsDetails } from "@/utils/upload";
 import { IUpload } from "@/interfaces/editor";
 import { ADD_VIDEO, ADD_IMAGE, ADD_AUDIO, dispatch } from "@designcombo/events";
 import { generateId } from "@designcombo/timeline";
+
+// Helper function to determine file type
+const getFileType = (filename: string): 'video' | 'image' | 'audio' => {
+  const extension = filename.split('.').pop()?.toLowerCase();
+  if (['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(extension || '')) {
+    return 'video';
+  } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(extension || '')) {
+    return 'image';
+  } else {
+    return 'audio';
+  }
+};
+
+// Helper function to get file icon
+const getFileIcon = (filename: string) => {
+  const fileType = getFileType(filename);
+  switch (fileType) {
+    case 'video':
+      return <Play size={16} />;
+    case 'image':
+      return <ImageIcon size={16} />;
+    case 'audio':
+      return <Music size={16} />;
+    default:
+      return <ImageIcon size={16} />;
+  }
+};
+
+
 
 export const Uploads = () => {
   const inputFileRef = useRef<HTMLInputElement>(null);
@@ -134,30 +163,7 @@ export const Uploads = () => {
     }
   };
 
-  const getFileType = (filename: string): 'video' | 'image' | 'audio' => {
-    const extension = filename.split('.').pop()?.toLowerCase();
-    if (['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(extension || '')) {
-      return 'video';
-    } else if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(extension || '')) {
-      return 'image';
-    } else {
-      return 'audio';
-    }
-  };
 
-  const getFileIcon = (filename: string) => {
-    const fileType = getFileType(filename);
-    switch (fileType) {
-      case 'video':
-        return <Play size={16} />;
-      case 'image':
-        return <ImageIcon size={16} />;
-      case 'audio':
-        return <Music size={16} />;
-      default:
-        return <ImageIcon size={16} />;
-    }
-  };
 
   return (
     <div className="flex-1 flex flex-col">
@@ -209,16 +215,24 @@ export const Uploads = () => {
         </div>
       </div>
       <ScrollArea>
-        <div className="px-4 masonry-sm">
-          {uploads.map((upload) => (
-            <UploadItem
-              key={upload.id}
-              upload={upload}
-              onAddToTimeline={() => handleAddToTimeline(upload)}
-              onRemove={() => removeUpload(upload.id)}
-              getFileIcon={getFileIcon}
-            />
-          ))}
+        <div className="px-4 py-2">
+          <div className="grid grid-cols-2 gap-2">
+            {uploads.map((upload) => (
+              <UploadItem
+                key={upload.id}
+                upload={upload}
+                onAddToTimeline={() => handleAddToTimeline(upload)}
+                onRemove={() => removeUpload(upload.id)}
+              />
+            ))}
+          </div>
+          {uploads.length === 0 && (
+            <div className="text-center py-8 text-muted-foreground">
+              <ImageIcon size={48} className="mx-auto mb-2 opacity-50" />
+              <p className="text-sm">No files uploaded yet</p>
+              <p className="text-xs">Click Upload to add media files</p>
+            </div>
+          )}
         </div>
       </ScrollArea>
     </div>
@@ -228,43 +242,207 @@ export const Uploads = () => {
 const UploadItem = ({
   upload,
   onAddToTimeline,
-  onRemove,
-  getFileIcon
+  onRemove
 }: {
   upload: IUpload;
   onAddToTimeline: () => void;
   onRemove: () => void;
-  getFileIcon: (filename: string) => React.ReactNode;
 }) => {
-  const isImage = upload.originalName.match(/\.(jpg|jpeg|png|gif|webp|svg)$/i);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [showVideoPreview, setShowVideoPreview] = useState(false);
+  const [videoDuration, setVideoDuration] = useState<number | null>(null);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const thumbnailVideoRef = useRef<HTMLVideoElement>(null);
+
+  const fileType = getFileType(upload.originalName);
+  const isImage = fileType === 'image';
+  const isVideo = fileType === 'video';
+
+  // Generate preview for images and videos
+  useEffect(() => {
+    if (upload.previewData) {
+      // Use the blob URL created during upload for immediate preview
+      setPreviewUrl(upload.previewData);
+    } else if (isImage || isVideo) {
+      // For images and videos, use the uploaded file URL as preview
+      setIsLoading(true);
+      setPreviewUrl(upload.url);
+    } else {
+      // For audio and other files, no preview
+      setPreviewUrl(null);
+    }
+  }, [upload, isImage, isVideo]);
+
+  const handleMediaLoad = () => {
+    setIsLoading(false);
+  };
+
+  const handleMediaError = () => {
+    setIsLoading(false);
+    setPreviewUrl(null);
+  };
+
+  const handleVideoLoadedMetadata = () => {
+    if (thumbnailVideoRef.current) {
+      setVideoDuration(thumbnailVideoRef.current.duration);
+    }
+  };
+
+  const formatDuration = (seconds: number): string => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
+
+
+  const handleVideoEnded = () => {
+    setIsPlaying(false);
+  };
+
+  const toggleVideoPreview = (e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setShowVideoPreview(!showVideoPreview);
+    if (isPlaying && videoRef.current) {
+      videoRef.current.pause();
+      setIsPlaying(false);
+    }
+  };
+
+  // Handle keyboard events for video preview modal
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (showVideoPreview && e.key === 'Escape') {
+        toggleVideoPreview();
+      }
+    };
+
+    if (showVideoPreview) {
+      document.addEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = 'hidden'; // Prevent background scrolling
+    }
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      document.body.style.overflow = 'unset';
+    };
+  }, [showVideoPreview]);
 
   return (
-    <div className="relative group mb-2 bg-background border rounded-md overflow-hidden cursor-pointer hover:bg-secondary/50 max-w-[120px]"> 
-      <div onClick={onAddToTimeline} className="p-2">
-        {isImage && upload.previewData ? (
-          <img
-            src={upload.previewData}
-            alt={upload.originalName}
-            className="w-full h-24 object-cover rounded-sm mb-2"
-          />
-        ) : (
-          <div className="w-full h-24 bg-secondary/30 rounded-sm mb-2 flex items-center justify-center">
-            {getFileIcon(upload.originalName)}
+    <div className="relative group bg-background border rounded-md overflow-hidden transition-colors">
+      {/* Video Preview Modal */}
+      {showVideoPreview && isVideo && previewUrl && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50" onClick={toggleVideoPreview}>
+          <div className="relative max-w-4xl max-h-[80vh] w-full mx-4" onClick={(e) => e.stopPropagation()}>
+            <video
+              ref={videoRef}
+              src={previewUrl}
+              className="w-full h-full rounded-lg"
+              controls
+              autoPlay
+              onEnded={handleVideoEnded}
+              onLoadedData={handleMediaLoad}
+              onError={handleMediaError}
+            />
+            <button
+              onClick={toggleVideoPreview}
+              className="absolute top-2 right-2 bg-black/50 hover:bg-black/70 text-white rounded-full p-2 transition-colors"
+            >
+              <X size={20} />
+            </button>
           </div>
-        )}
-        <div className="text-xs text-text-primary truncate">
-          {upload.originalName}
+        </div>
+      )}
+
+      {/* Main Upload Item */}
+      <div
+        className="cursor-pointer hover:bg-secondary/50 transition-colors"
+        title={`${upload.originalName} - Click to add to timeline`}
+      >
+        <div onClick={onAddToTimeline} className="p-2">
+          <div className="w-full h-20 bg-secondary/30 rounded-sm mb-2 flex items-center justify-center relative overflow-hidden">
+            {previewUrl ? (
+              <>
+                {isLoading && (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="w-4 h-4 border-2 border-primary border-t-transparent rounded-full animate-spin"></div>
+                  </div>
+                )}
+                {isVideo ? (
+                  <div className="relative w-full h-full">
+                    <video
+                      ref={thumbnailVideoRef}
+                      src={previewUrl}
+                      className="w-full h-full object-cover"
+                      muted
+                      onLoadedData={handleMediaLoad}
+                      onLoadedMetadata={handleVideoLoadedMetadata}
+                      onError={handleMediaError}
+                      style={{ display: isLoading ? 'none' : 'block' }}
+                    />
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/20">
+                      <div className="flex flex-col items-center gap-1">
+                        <Play size={20} className="text-white drop-shadow-lg" />
+                        <span className="text-xs text-white drop-shadow-lg">Preview</span>
+                      </div>
+                    </div>
+                    {videoDuration && (
+                      <div className="absolute bottom-1 right-1 bg-black/70 text-white text-xs px-1 rounded">
+                        {formatDuration(videoDuration)}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <img
+                    src={previewUrl}
+                    alt={upload.originalName}
+                    className="w-full h-full object-cover"
+                    onLoad={handleMediaLoad}
+                    onError={handleMediaError}
+                    style={{ display: isLoading ? 'none' : 'block' }}
+                  />
+                )}
+              </>
+            ) : (
+              <div className="flex flex-col items-center justify-center text-muted-foreground">
+                {getFileIcon(upload.originalName)}
+                <span className="text-xs mt-1 capitalize">{fileType}</span>
+              </div>
+            )}
+          </div>
+          <div className="text-xs text-text-primary truncate" title={upload.originalName}>
+            {upload.originalName}
+          </div>
+          <div className="text-xs text-muted-foreground truncate capitalize">
+            {fileType}
+          </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="absolute top-1 right-1 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          {isVideo && previewUrl && (
+            <button
+              onClick={toggleVideoPreview}
+              className="bg-blue-500 hover:bg-blue-600 text-white rounded-full p-1 transition-colors"
+              title="Preview video"
+            >
+              <Play size={12} />
+            </button>
+          )}
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              onRemove();
+            }}
+            className="bg-red-500 hover:bg-red-600 text-white rounded-full p-1 transition-colors"
+            title="Remove file"
+          >
+            <X size={12} />
+          </button>
         </div>
       </div>
-      <button
-        onClick={(e) => {
-          e.stopPropagation();
-          onRemove();
-        }}
-        className="absolute top-1 right-1 opacity-0 group-hover:opacity-100 transition-opacity bg-red-500 hover:bg-red-600 text-white rounded-full p-1"
-      >
-        <X size={12} />
-      </button>
     </div>
   );
 };
