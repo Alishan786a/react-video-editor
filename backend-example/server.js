@@ -327,6 +327,18 @@ const createVideoFromProject = async (projectData, renderId) => {
             const top = parseInt(String(details.top || '0').replace('px', '')) || 0;
             const left = parseInt(String(details.left || '0').replace('px', '')) || 0;
 
+            // Handle audio trim information
+            let trimStart = 0;
+            let trimEnd = null;
+            let trimDuration = null;
+
+            if (trackItem.trim && (details.type === 'audio' || itemDetails.type === 'audio')) {
+              trimStart = (trackItem.trim.from || 0) / 1000; // Convert ms to seconds
+              trimEnd = (trackItem.trim.to || 0) / 1000; // Convert ms to seconds
+              trimDuration = trimEnd - trimStart;
+              console.log(`Audio trim detected for ${itemId}: ${trimStart}s to ${trimEnd}s (duration: ${trimDuration}s)`);
+            }
+
             mediaItems.push({
               id: itemId,
               type: details.type || itemDetails.type || 'image',
@@ -334,6 +346,9 @@ const createVideoFromProject = async (projectData, renderId) => {
               startTime,
               endTime,
               duration,
+              trimStart,
+              trimEnd,
+              trimDuration,
               width: details.width || width,
               height: details.height || height,
               top,
@@ -342,7 +357,7 @@ const createVideoFromProject = async (projectData, renderId) => {
               transform: details.transform || 'none'
             });
 
-            console.log(`Parsed media item ${itemId}:`, {
+            const logData = {
               type: details.type || itemDetails.type,
               startTime,
               endTime,
@@ -350,7 +365,14 @@ const createVideoFromProject = async (projectData, renderId) => {
               position: `${left}, ${top}`,
               size: `${details.width}x${details.height}`,
               src: details.src.substring(0, 50) + '...'
-            });
+            };
+
+            // Add trim info to log if available
+            if (trimStart !== 0 || trimDuration !== null) {
+              logData.trim = { start: trimStart, duration: trimDuration, end: trimEnd };
+            }
+
+            console.log(`Parsed media item ${itemId}:`, logData);
           }
         }
       }
@@ -703,10 +725,19 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
       // Add audio timing filter if audio is present
       if (audioFile) {
         console.log(`Audio timing: ${audioFile.startTime}s to ${audioFile.endTime}s (duration: ${audioFile.duration}s)`);
-        // Apply timing constraints to audio: trim to the specified time range and pad with silence
-        complexFilters.push(
-          `[2:a]atrim=start=${audioFile.startTime}:duration=${audioFile.duration},asetpts=PTS-STARTPTS,adelay=${audioFile.startTime * 1000}|${audioFile.startTime * 1000}[audio_timed]`
-        );
+
+        // Build audio filter based on whether trim information is available
+        let audioFilter;
+        if (audioFile.trimStart !== undefined && audioFile.trimDuration !== undefined) {
+          console.log(`Audio trim: extracting ${audioFile.trimStart}s to ${audioFile.trimStart + audioFile.trimDuration}s from original audio`);
+          // First trim the audio to extract the desired segment, then position it in timeline
+          audioFilter = `[2:a]atrim=start=${audioFile.trimStart}:duration=${audioFile.trimDuration},asetpts=PTS-STARTPTS,adelay=${audioFile.startTime * 1000}|${audioFile.startTime * 1000}[audio_timed]`;
+        } else {
+          // No trim info, use original logic
+          audioFilter = `[2:a]atrim=start=${audioFile.startTime}:duration=${audioFile.duration},asetpts=PTS-STARTPTS,adelay=${audioFile.startTime * 1000}|${audioFile.startTime * 1000}[audio_timed]`;
+        }
+
+        complexFilters.push(audioFilter);
       }
 
       command = command.complexFilter(complexFilters);
@@ -771,10 +802,18 @@ const createVideoWithAudio = async (imageFile, audioFile, outputPath, width, hei
     // Build complex filter for image and audio timing
     const complexFilters = [
       // Scale image to fit canvas
-      `[0:v]scale=${width}:${height}[img_scaled]`,
-      // Apply timing constraints to audio
-      `[1:a]atrim=start=${audioFile.startTime}:duration=${audioFile.duration},asetpts=PTS-STARTPTS,adelay=${audioFile.startTime * 1000}|${audioFile.startTime * 1000}[audio_timed]`
+      `[0:v]scale=${width}:${height}[img_scaled]`
     ];
+
+    // Build audio filter based on whether trim information is available
+    if (audioFile.trimStart !== undefined && audioFile.trimDuration !== undefined) {
+      console.log(`Audio trim: extracting ${audioFile.trimStart}s to ${audioFile.trimStart + audioFile.trimDuration}s from original audio`);
+      // First trim the audio to extract the desired segment, then position it in timeline
+      complexFilters.push(`[1:a]atrim=start=${audioFile.trimStart}:duration=${audioFile.trimDuration},asetpts=PTS-STARTPTS,adelay=${audioFile.startTime * 1000}|${audioFile.startTime * 1000}[audio_timed]`);
+    } else {
+      // No trim info, use original logic
+      complexFilters.push(`[1:a]atrim=start=${audioFile.startTime}:duration=${audioFile.duration},asetpts=PTS-STARTPTS,adelay=${audioFile.startTime * 1000}|${audioFile.startTime * 1000}[audio_timed]`);
+    }
 
     ffmpeg()
       .input(imageFile.localPath)
