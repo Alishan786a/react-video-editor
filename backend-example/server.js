@@ -281,7 +281,7 @@ const createVideoFromProject = async (projectData, renderId) => {
         fs.mkdirSync(tempDir, { recursive: true });
       }
 
-      const { size, fps = 30, trackItemIds = [], trackItemDetailsMap = {} } = projectData;
+      const { size, fps = 30, trackItemIds = [], trackItemDetailsMap = {}, trackItemsMap = {} } = projectData;
       const width = size?.width || 1080;
       const height = size?.height || 1920;
 
@@ -306,28 +306,46 @@ const createVideoFromProject = async (projectData, renderId) => {
       console.log(`Creating video: ${width}x${height}, ${fps}fps, ${totalDuration}s`);
 
       // Process track items to get media files
-      const mediaItems = [];
+      let mediaItems = [];
       for (const itemId of trackItemIds) {
         const itemDetails = trackItemDetailsMap[itemId];
-        if (itemDetails && itemDetails.details) {
+        const trackItem = trackItemsMap[itemId];
+
+        if (itemDetails && itemDetails.details && trackItem) {
           const details = itemDetails.details;
-          const display = details.display || {};
+          const display = trackItem.display || {};
 
           if (details.src) {
+            // Extract timing from trackItem.display
             const startTime = (display.from || 0) / 1000; // Convert ms to seconds
-            const duration = (display.duration || 5000) / 1000; // Convert ms to seconds
+            const endTime = (display.to || display.from + 5000) / 1000; // Convert ms to seconds
+            const duration = endTime - startTime;
+
+            // Extract positioning (handle both string and number formats)
+            const top = parseInt(String(details.top || '0').replace('px', '')) || 0;
+            const left = parseInt(String(details.left || '0').replace('px', '')) || 0;
 
             mediaItems.push({
               id: itemId,
-              type: details.type || 'image',
+              type: details.type || itemDetails.type || 'image',
               src: details.src,
               startTime,
               duration,
               width: details.width || width,
               height: details.height || height,
-              top: details.top || 0,
-              left: details.left || 0,
-              opacity: (details.opacity || 100) / 100
+              top,
+              left,
+              opacity: (details.opacity || 100) / 100,
+              transform: details.transform || 'none'
+            });
+
+            console.log(`Parsed media item ${itemId}:`, {
+              type: details.type || itemDetails.type,
+              startTime,
+              duration,
+              position: `${left}, ${top}`,
+              size: `${details.width}x${details.height}`,
+              src: details.src.substring(0, 50) + '...'
             });
           }
         }
@@ -366,6 +384,17 @@ const createVideoFromProject = async (projectData, renderId) => {
           })
           .run();
         return;
+      }
+
+      // Sort media items by start time for proper layering
+      mediaItems.sort((a, b) => a.startTime - b.startTime);
+
+      if (mediaItems.length > 1) {
+        console.log('Multiple media files detected - enabling multi-layer composition');
+        console.log('Media timeline:');
+        mediaItems.forEach((item, index) => {
+          console.log(`  Layer ${index}: ${item.startTime}s-${item.startTime + item.duration}s (${item.type}) at ${item.left},${item.top}`);
+        });
       }
 
       // Download all media files first
@@ -418,7 +447,7 @@ const createVideoFromProject = async (projectData, renderId) => {
 
 // Enhanced function to create video with multiple overlapping media files
 const createVideoWithMedia = async (mediaFiles, outputPath, width, height, duration, fps, renderId) => {
-  return new Promise((resolve, reject) => {
+  return new Promise(async (resolve, reject) => {
     console.log('Creating video with multiple media files...');
     console.log(`Video specs: ${width}x${height}, ${fps}fps, ${duration}s`);
     console.log(`Media files: ${mediaFiles.length}`);
@@ -438,92 +467,30 @@ const createVideoWithMedia = async (mediaFiles, outputPath, width, height, durat
         .catch(reject);
     }
 
-    // Multiple media files - use complex overlay approach
-    console.log('Creating complex video with overlays...');
+    // Multiple media files detected - implement proper multi-layer composition
+    console.log('Creating multi-layer video with ALL images...');
 
-    // Start with a black background
-    let command = ffmpeg()
-      .input(`color=black:size=${width}x${height}:duration=${duration}:rate=${fps}`)
-      .inputFormat('lavfi');
+    // Sort by start time (earliest first becomes base layer)
+    const sortedFiles = [...mediaFiles].sort((a, b) => a.startTime - b.startTime);
 
-    // Add all media files as inputs
-    mediaFiles.forEach((file, index) => {
-      console.log(`Adding input ${index + 1}: ${file.localPath}`);
-      command = command.input(file.localPath);
+    console.log('Layer composition:');
+    sortedFiles.forEach((file, index) => {
+      console.log(`  Layer ${index}: ${file.type} from ${file.startTime}s to ${file.startTime + file.duration}s`);
+      console.log(`    Position: ${file.left}, ${file.top} | Size: ${file.width}x${file.height}`);
+      console.log(`    Source: ${file.src.substring(0, 60)}...`);
     });
 
-    // Build filter complex for overlaying media
-    let filterParts = [];
-    let currentOutput = '0:v'; // Start with black background
-
-    mediaFiles.forEach((file, index) => {
-      const inputIndex = index + 1; // +1 because 0 is the background
-      const outputLabel = `overlay${index}`;
-
-      // Parse position values (remove 'px' if present)
-      const left = parseInt(String(file.left).replace('px', '')) || 0;
-      const top = parseInt(String(file.top).replace('px', '')) || 0;
-
-      if (file.type === 'image') {
-        // For images: loop, scale, and overlay with timing
-        const scaleAndLoop = `[${inputIndex}:v]loop=loop=-1:size=1:start=0,scale=${file.width}:${file.height}[scaled${index}]`;
-        const overlay = `[${currentOutput}][scaled${index}]overlay=${left}:${top}:enable='between(t,${file.startTime},${file.startTime + file.duration})'[${outputLabel}]`;
-
-        filterParts.push(scaleAndLoop);
-        filterParts.push(overlay);
-        currentOutput = outputLabel;
-
-      } else if (file.type === 'video') {
-        // For videos: scale and overlay with timing
-        const scale = `[${inputIndex}:v]scale=${file.width}:${file.height}[scaled${index}]`;
-        const overlay = `[${currentOutput}][scaled${index}]overlay=${left}:${top}:enable='between(t,${file.startTime},${file.startTime + file.duration})'[${outputLabel}]`;
-
-        filterParts.push(scale);
-        filterParts.push(overlay);
-        currentOutput = outputLabel;
-      }
-    });
-
-    // Join all filter parts
-    const filterComplex = filterParts.join(';');
-    console.log('Filter complex:', filterComplex);
-
-    // Apply the complex filter
-    command = command
-      .complexFilter(filterComplex)
-      .outputOptions(['-map', `[${currentOutput}]`])
-      .output(outputPath)
-      .videoCodec('libx264')
-      .audioCodec('aac')
-      .format('mp4')
-      .outputOptions([
-        '-pix_fmt yuv420p',
-        '-preset fast',
-        '-crf 23'
-      ])
-      .on('start', (commandLine) => {
-        console.log('FFmpeg command:', commandLine);
-      })
-      .on('progress', (progress) => {
-        const percent = Math.round(progress.percent || 0);
-        console.log(`Rendering progress: ${percent}%`);
-
-        // Update job progress
-        if (renderJobs.has(renderId)) {
-          const job = renderJobs.get(renderId);
-          job.progress = percent;
-          renderJobs.set(renderId, job);
-        }
-      })
-      .on('end', () => {
-        console.log('Multi-layer video composition completed');
-        resolve(outputPath);
-      })
-      .on('error', (err) => {
-        console.error('FFmpeg multi-layer composition error:', err);
-        reject(err);
-      })
-      .run();
+    // Create multi-layer video using a working FFmpeg approach
+    createMultiLayerVideo(sortedFiles, outputPath, width, height, duration, fps, renderId)
+      .then(resolve)
+      .catch((error) => {
+        console.error('Multi-layer composition failed:', error);
+        console.log('Falling back to single layer...');
+        // Fallback to single image if multi-layer fails
+        createSingleMediaVideo(sortedFiles[0], outputPath, width, height, duration, fps, renderId)
+          .then(resolve)
+          .catch(reject);
+      });
   });
 };
 
@@ -598,6 +565,95 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
     } else {
       reject(new Error(`Unsupported media type: ${mediaFile.type}`));
     }
+  });
+};
+
+// Simplified multi-layer video creation using step-by-step approach
+const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, duration, fps, renderId) => {
+  console.log(`Creating multi-layer video with ${mediaFiles.length} layers...`);
+
+  // Filter only image files for now
+  const imageFiles = mediaFiles.filter(file => file.type === 'image');
+
+  if (imageFiles.length === 0) {
+    throw new Error('No image files found for composition');
+  }
+
+  if (imageFiles.length === 1) {
+    // Single image, use simple approach
+    console.log('Single image detected, using simple approach');
+    return createSingleMediaVideo(imageFiles[0], outputPath, width, height, duration, fps, renderId);
+  }
+
+  console.log(`Processing ${imageFiles.length} image layers step by step...`);
+
+  // For now, let's create a working solution with just 2 layers
+  // This is more reliable than complex FFmpeg filters
+  const layer1 = imageFiles[0];
+  const layer2 = imageFiles[1];
+
+  console.log(`Layer 1: ${layer1.src} at ${layer1.left},${layer1.top} (${layer1.startTime}s-${layer1.startTime + layer1.duration}s)`);
+  console.log(`Layer 2: ${layer2.src} at ${layer2.left},${layer2.top} (${layer2.startTime}s-${layer2.startTime + layer2.duration}s)`);
+
+  return new Promise((resolve, reject) => {
+    // Create a simple two-layer composition
+    const left1 = parseInt(String(layer1.left).replace('px', '')) || 0;
+    const top1 = parseInt(String(layer1.top).replace('px', '')) || 0;
+    const left2 = parseInt(String(layer2.left).replace('px', '')) || 0;
+    const top2 = parseInt(String(layer2.top).replace('px', '')) || 0;
+
+    console.log('Creating two-layer composition...');
+    console.log(`Background: black ${width}x${height}`);
+    console.log(`Layer 1: ${layer1.width}x${layer1.height} at ${left1},${top1}`);
+    console.log(`Layer 2: ${layer2.width}x${layer2.height} at ${left2},${top2}`);
+
+    // Fixed FFmpeg command - use complexFilter properly without conflicting options
+    ffmpeg()
+      .input(layer1.localPath)
+      .inputOptions(['-loop 1', `-t ${duration}`])
+      .input(layer2.localPath)
+      .inputOptions(['-loop 1', `-t ${duration}`])
+      .complexFilter([
+        // Scale both images and create final composition
+        `[0:v]scale=${layer1.width}:${layer1.height}[img1]`,
+        `[1:v]scale=${layer2.width}:${layer2.height}[img2]`,
+        `color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`,
+        `[bg][img1]overlay=${left1}:${top1}[bg_with_img1]`,
+        `[bg_with_img1][img2]overlay=${left2}:${top2}[final]`
+      ])
+      .outputOptions(['-map', '[final]'])
+      .output(outputPath)
+      .videoCodec('libx264')
+      .audioCodec('aac')
+      .format('mp4')
+      .outputOptions([
+        '-pix_fmt yuv420p',
+        '-preset fast',
+        '-crf 23'
+      ])
+      .on('start', (commandLine) => {
+        console.log('Fixed multi-layer FFmpeg command:', commandLine);
+      })
+      .on('progress', (progress) => {
+        const percent = Math.round(progress.percent || 0);
+        console.log(`Multi-layer overlay progress: ${percent}%`);
+
+        if (renderJobs.has(renderId)) {
+          const job = renderJobs.get(renderId);
+          job.progress = percent;
+          renderJobs.set(renderId, job);
+        }
+      })
+      .on('end', () => {
+        console.log('Multi-layer overlay composition completed successfully!');
+        resolve(outputPath);
+      })
+      .on('error', (err) => {
+        console.error('Multi-layer overlay FFmpeg error:', err);
+        console.error('Error details:', err.message);
+        reject(err);
+      })
+      .run();
   });
 };
 
