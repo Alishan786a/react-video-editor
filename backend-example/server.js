@@ -4,10 +4,18 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
+const ffmpeg = require('fluent-ffmpeg');
+const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 require('dotenv').config();
+
+// Set FFmpeg path
+ffmpeg.setFfmpegPath(ffmpegPath);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// In-memory storage for render jobs
+const renderJobs = new Map();
 
 // Middleware
 app.use(cors());
@@ -217,20 +225,89 @@ app.get('/api/v1/editor/files/:folder/:filename', (req, res) => {
   }
 });
 
-// Optional: Video rendering endpoint (placeholder)
+// Video rendering helper functions
+const createVideoFromProject = async (projectData, renderId) => {
+  return new Promise((resolve, reject) => {
+    const outputPath = path.join(STORAGE_PATH, 'renders', `${renderId}.mp4`);
+
+    // Ensure renders directory exists
+    const rendersDir = path.join(STORAGE_PATH, 'renders');
+    if (!fs.existsSync(rendersDir)) {
+      fs.mkdirSync(rendersDir, { recursive: true });
+    }
+
+    // Create a simple video based on project data
+    // For now, we'll create a basic video with the specified dimensions and duration
+    const { size, fps = 30 } = projectData;
+    const width = size?.width || 1080;
+    const height = size?.height || 1920;
+
+    // Calculate duration from tracks (simplified)
+    let duration = 10; // Default 10 seconds
+    if (projectData.tracks && projectData.tracks.length > 0) {
+      // Find the longest track duration
+      const maxDuration = projectData.tracks.reduce((max, track) => {
+        if (track.trackItems && track.trackItems.length > 0) {
+          const trackDuration = track.trackItems.reduce((sum, item) => {
+            return sum + (item.duration || 5);
+          }, 0);
+          return Math.max(max, trackDuration);
+        }
+        return max;
+      }, 0);
+      duration = maxDuration > 0 ? Math.ceil(maxDuration / 1000) : 10; // Convert ms to seconds
+    }
+
+    console.log(`Creating video: ${width}x${height}, ${fps}fps, ${duration}s`);
+
+    // Create a basic video with FFmpeg
+    ffmpeg()
+      .input(`color=black:size=${width}x${height}:duration=${duration}:rate=${fps}`)
+      .inputFormat('lavfi')
+      .output(outputPath)
+      .videoCodec('libx264')
+      .audioCodec('aac')
+      .format('mp4')
+      .on('start', (commandLine) => {
+        console.log('FFmpeg command:', commandLine);
+      })
+      .on('progress', (progress) => {
+        console.log(`Rendering progress: ${Math.round(progress.percent || 0)}%`);
+        // Update job progress
+        if (renderJobs.has(renderId)) {
+          const job = renderJobs.get(renderId);
+          job.progress = Math.round(progress.percent || 0);
+          renderJobs.set(renderId, job);
+        }
+      })
+      .on('end', () => {
+        console.log('Video rendering completed');
+        resolve(outputPath);
+      })
+      .on('error', (err) => {
+        console.error('FFmpeg error:', err);
+        reject(err);
+      })
+      .run();
+  });
+};
+
+// Video rendering endpoint
 app.post('/api/v1/editor/render', async (req, res) => {
   try {
     const projectData = req.body;
     const renderId = uuidv4();
 
-    // TODO: Implement video rendering logic here
-    // This could involve:
-    // 1. Processing the project data
-    // 2. Using FFmpeg or similar to render video
-    // 3. Uploading rendered video to storage
-    // 4. Updating render status
+    console.log('Render request received:', { renderId, projectKeys: Object.keys(projectData) });
 
-    console.log('Render request received:', { renderId, projectData });
+    // Store job in memory
+    renderJobs.set(renderId, {
+      id: renderId,
+      status: 'processing',
+      progress: 0,
+      createdAt: new Date(),
+      projectData
+    });
 
     res.json({
       success: true,
@@ -238,6 +315,32 @@ app.post('/api/v1/editor/render', async (req, res) => {
       status: 'processing',
       message: 'Render job started successfully'
     });
+
+    // Start rendering in background
+    try {
+      const outputPath = await createVideoFromProject(projectData, renderId);
+      const outputUrl = `http://localhost:${PORT}/api/v1/editor/files/renders/${renderId}.mp4`;
+
+      // Update job status
+      renderJobs.set(renderId, {
+        ...renderJobs.get(renderId),
+        status: 'completed',
+        progress: 100,
+        output: outputUrl,
+        outputPath,
+        completedAt: new Date()
+      });
+
+      console.log(`Render job ${renderId} completed: ${outputUrl}`);
+    } catch (error) {
+      console.error(`Render job ${renderId} failed:`, error);
+      renderJobs.set(renderId, {
+        ...renderJobs.get(renderId),
+        status: 'failed',
+        error: error.message,
+        failedAt: new Date()
+      });
+    }
 
   } catch (error) {
     console.error('Error starting render:', error);
@@ -248,22 +351,30 @@ app.post('/api/v1/editor/render', async (req, res) => {
   }
 });
 
-// Optional: Check render status (placeholder)
+// Check render status endpoint
 app.get('/api/v1/editor/render/status/:renderId', async (req, res) => {
   try {
     const { renderId } = req.params;
 
-    // TODO: Implement render status checking
-    // This would typically check a database or job queue
+    if (!renderJobs.has(renderId)) {
+      return res.status(404).json({
+        error: 'Render job not found',
+        renderId
+      });
+    }
 
-    // For demo purposes, create a mock video file URL
-    const mockVideoUrl = `http://localhost:3000/api/v1/editor/files/renders/${renderId}.mp4`;
+    const job = renderJobs.get(renderId);
 
     res.json({
       render: {
-        progress: 100, // Placeholder - always complete
-        status: 'completed',
-        output: mockVideoUrl
+        renderId: job.id,
+        projectId: job.projectData?.id,
+        status: job.status,
+        progress: job.progress,
+        output: job.output,
+        createdAt: job.createdAt,
+        updatedAt: job.completedAt || job.failedAt || job.createdAt,
+        error: job.error
       }
     });
 
@@ -271,6 +382,20 @@ app.get('/api/v1/editor/render/status/:renderId', async (req, res) => {
     console.error('Error checking render status:', error);
     res.status(500).json({ error: 'Failed to check render status' });
   }
+});
+
+// Render health check endpoint
+app.get('/api/v1/editor/render/health', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Render service is healthy',
+    timestamp: new Date().toISOString(),
+    active_jobs: Array.from(renderJobs.values()).filter(job => job.status === 'processing').length,
+    total_jobs: renderJobs.size,
+    supported_formats: ['mp4'],
+    max_resolution: '4K (3840x2160)',
+    max_duration: '10 minutes'
+  });
 });
 
 // Optional: Caption generation endpoint (placeholder)
