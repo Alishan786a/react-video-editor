@@ -1,0 +1,105 @@
+{
+  "id": "AudioTimingTest",
+  "fps": 30,
+  "tracks": [
+    {
+      "id": "track1",
+      "accepts": ["image"],
+      "type": "image",
+      "items": ["img1"],
+      "magnetic": false,
+      "static": false
+    },
+    {
+      "id": "track2", 
+      "accepts": ["image"],
+      "type": "image",
+      "items": ["img2"],
+      "magnetic": false,
+      "static": false
+    },
+    {
+      "id": "track3",
+      "accepts": ["audio"],
+      "type": "audio", 
+      "items": ["audio1"],
+      "magnetic": false,
+      "static": false
+    }
+  ],
+  "size": {
+    "width": 1080,
+    "height": 1920
+  },
+  "trackItemDetailsMap": {
+    "img1": {
+      "type": "image",
+      "details": {
+        "src": "https://ik.imagekit.io/wombo/images/img4.jpg",
+        "width": 1280,
+        "height": 1920,
+        "opacity": 100,
+        "top": "0px",
+        "left": "-100px"
+      }
+    },
+    "img2": {
+      "type": "image", 
+      "details": {
+        "src": "https://ik.imagekit.io/wombo/images/img1.jpg",
+        "width": 1280,
+        "height": 853,
+        "opacity": 100,
+        "top": "533px",
+        "left": "-100px"
+      }
+    },
+    "audio1": {
+      "type": "audio",
+      "details": {
+        "src": "https://ik.imagekit.io/snapmotion/timer-voice.mp3"
+      }
+    }
+  },
+  "trackItemIds": ["img1", "img2", "audio1"],
+  "transitionsMap": {},
+  "trackItemsMap": {
+    "img1": {
+      "id": "img1",
+      "type": "image",
+      "name": "image",
+      "display": {
+        "from": 1000,
+        "to": 4000
+      },
+      "playbackRate": 1,
+      "metadata": {},
+      "isMain": false
+    },
+    "img2": {
+      "id": "img2", 
+      "type": "image",
+      "name": "image",
+      "display": {
+        "from": 2000,
+        "to": 5000
+      },
+      "playbackRate": 1,
+      "metadata": {},
+      "isMain": false
+    },
+    "audio1": {
+      "id": "audio1",
+      "type": "audio", 
+      "name": "audio",
+      "display": {
+        "from": 1500,
+        "to": 3500
+      },
+      "playbackRate": 1,
+      "metadata": {},
+      "isMain": false
+    }
+  },
+  "transitionIds": []
+}

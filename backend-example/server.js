@@ -607,7 +607,7 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
     console.log(`Layer 1 timing: show between ${layer1.startTime}s and ${layer1.endTime}s`);
     console.log(`Layer 2 timing: show between ${layer2.startTime}s and ${layer2.endTime}s`);
     if (audioFile) {
-      console.log(`Audio: ${audioFile.src} (${audioFile.startTime}s-${audioFile.startTime + audioFile.duration}s)`);
+      console.log(`Audio: ${audioFile.src} (${audioFile.startTime}s-${audioFile.endTime}s)`);
     }
 
     return new Promise((resolve, reject) => {
@@ -637,8 +637,9 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
         command = command.input(audioFile.localPath);
       }
 
-      // Build complex filter for video with proper timing constraints
-      const videoFilters = [
+      // Build complex filter for video and audio with proper timing constraints
+      const complexFilters = [
+        // Video filters
         `[0:v]scale=${layer1.width}:${layer1.height}[img1]`,
         `[1:v]scale=${layer2.width}:${layer2.height}[img2]`,
         `color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`,
@@ -648,13 +649,22 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
         `[bg_with_img1][img2]overlay=${left2}:${top2}:enable='between(t,${layer2.startTime},${layer2.endTime})'[final]`
       ];
 
-      command = command.complexFilter(videoFilters);
+      // Add audio timing filter if audio is present
+      if (audioFile) {
+        console.log(`Audio timing: ${audioFile.startTime}s to ${audioFile.endTime}s (duration: ${audioFile.duration}s)`);
+        // Apply timing constraints to audio: trim to the specified time range and pad with silence
+        complexFilters.push(
+          `[2:a]atrim=start=${audioFile.startTime}:duration=${audioFile.duration},asetpts=PTS-STARTPTS,adelay=${audioFile.startTime * 1000}|${audioFile.startTime * 1000}[audio_timed]`
+        );
+      }
+
+      command = command.complexFilter(complexFilters);
 
       // Map video and audio outputs
       if (audioFile) {
         command = command
           .outputOptions(['-map', '[final]'])
-          .outputOptions(['-map', '2:a']) // Map audio from third input
+          .outputOptions(['-map', '[audio_timed]']) // Map timed audio
           .audioCodec('aac');
       } else {
         command = command
@@ -704,24 +714,33 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
 const createVideoWithAudio = async (imageFile, audioFile, outputPath, width, height, duration, fps, renderId) => {
   return new Promise((resolve, reject) => {
     console.log(`Creating video with image and audio...`);
-    console.log(`Image: ${imageFile.localPath}`);
-    console.log(`Audio: ${audioFile.localPath}`);
+    console.log(`Image: ${imageFile.localPath} (${imageFile.startTime}s-${imageFile.endTime}s)`);
+    console.log(`Audio: ${audioFile.localPath} (${audioFile.startTime}s-${audioFile.endTime}s)`);
+
+    // Build complex filter for image and audio timing
+    const complexFilters = [
+      // Scale image to fit canvas
+      `[0:v]scale=${width}:${height}[img_scaled]`,
+      // Apply timing constraints to audio
+      `[1:a]atrim=start=${audioFile.startTime}:duration=${audioFile.duration},asetpts=PTS-STARTPTS,adelay=${audioFile.startTime * 1000}|${audioFile.startTime * 1000}[audio_timed]`
+    ];
 
     ffmpeg()
       .input(imageFile.localPath)
       .inputOptions(['-loop 1', `-t ${duration}`])
       .input(audioFile.localPath)
+      .complexFilter(complexFilters)
       .output(outputPath)
       .videoCodec('libx264')
       .audioCodec('aac')
       .format('mp4')
-      .size(`${width}x${height}`)
       .fps(fps)
       .outputOptions([
+        '-map', '[img_scaled]',
+        '-map', '[audio_timed]',
         '-pix_fmt yuv420p',
         '-preset fast',
-        '-crf 23',
-        '-shortest'
+        '-crf 23'
       ])
       .on('start', (commandLine) => {
         console.log('Image + Audio FFmpeg command:', commandLine);
