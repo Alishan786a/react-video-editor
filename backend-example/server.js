@@ -568,75 +568,161 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
   });
 };
 
-// Simplified multi-layer video creation using step-by-step approach
+// Enhanced multi-layer video creation with audio support
 const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, duration, fps, renderId) => {
   console.log(`Creating multi-layer video with ${mediaFiles.length} layers...`);
 
-  // Filter only image files for now
+  // Separate media types
   const imageFiles = mediaFiles.filter(file => file.type === 'image');
+  const audioFiles = mediaFiles.filter(file => file.type === 'audio');
+
+  console.log(`Found ${imageFiles.length} image files and ${audioFiles.length} audio files`);
 
   if (imageFiles.length === 0) {
     throw new Error('No image files found for composition');
   }
 
-  if (imageFiles.length === 1) {
-    // Single image, use simple approach
-    console.log('Single image detected, using simple approach');
+  if (imageFiles.length === 1 && audioFiles.length === 0) {
+    // Single image, no audio - use simple approach
+    console.log('Single image, no audio - using simple approach');
     return createSingleMediaVideo(imageFiles[0], outputPath, width, height, duration, fps, renderId);
   }
 
-  console.log(`Processing ${imageFiles.length} image layers step by step...`);
+  console.log(`Processing ${imageFiles.length} image layers and ${audioFiles.length} audio tracks...`);
 
-  // For now, let's create a working solution with just 2 layers
-  // This is more reliable than complex FFmpeg filters
-  const layer1 = imageFiles[0];
-  const layer2 = imageFiles[1];
+  // Handle different scenarios
+  if (imageFiles.length === 1 && audioFiles.length === 1) {
+    // Single image + audio
+    return createVideoWithAudio(imageFiles[0], audioFiles[0], outputPath, width, height, duration, fps, renderId);
+  } else if (imageFiles.length >= 2) {
+    // Multiple images (with or without audio)
+    const layer1 = imageFiles[0];
+    const layer2 = imageFiles[1];
+    const audioFile = audioFiles.length > 0 ? audioFiles[0] : null;
 
-  console.log(`Layer 1: ${layer1.src} at ${layer1.left},${layer1.top} (${layer1.startTime}s-${layer1.startTime + layer1.duration}s)`);
-  console.log(`Layer 2: ${layer2.src} at ${layer2.left},${layer2.top} (${layer2.startTime}s-${layer2.startTime + layer2.duration}s)`);
+    console.log(`Layer 1: ${layer1.src} at ${layer1.left},${layer1.top} (${layer1.startTime}s-${layer1.startTime + layer1.duration}s)`);
+    console.log(`Layer 2: ${layer2.src} at ${layer2.left},${layer2.top} (${layer2.startTime}s-${layer2.startTime + layer2.duration}s)`);
+    if (audioFile) {
+      console.log(`Audio: ${audioFile.src} (${audioFile.startTime}s-${audioFile.startTime + audioFile.duration}s)`);
+    }
 
-  return new Promise((resolve, reject) => {
-    // Create a simple two-layer composition
-    const left1 = parseInt(String(layer1.left).replace('px', '')) || 0;
-    const top1 = parseInt(String(layer1.top).replace('px', '')) || 0;
-    const left2 = parseInt(String(layer2.left).replace('px', '')) || 0;
-    const top2 = parseInt(String(layer2.top).replace('px', '')) || 0;
+    return new Promise((resolve, reject) => {
+      // Create multi-layer composition with optional audio
+      const left1 = parseInt(String(layer1.left).replace('px', '')) || 0;
+      const top1 = parseInt(String(layer1.top).replace('px', '')) || 0;
+      const left2 = parseInt(String(layer2.left).replace('px', '')) || 0;
+      const top2 = parseInt(String(layer2.top).replace('px', '')) || 0;
 
-    console.log('Creating two-layer composition...');
-    console.log(`Background: black ${width}x${height}`);
-    console.log(`Layer 1: ${layer1.width}x${layer1.height} at ${left1},${top1}`);
-    console.log(`Layer 2: ${layer2.width}x${layer2.height} at ${left2},${top2}`);
+      console.log('Creating multi-layer composition with audio...');
+      console.log(`Background: black ${width}x${height}`);
+      console.log(`Layer 1: ${layer1.width}x${layer1.height} at ${left1},${top1}`);
+      console.log(`Layer 2: ${layer2.width}x${layer2.height} at ${left2},${top2}`);
+      if (audioFile) {
+        console.log(`Audio: ${audioFile.localPath}`);
+      }
 
-    // Fixed FFmpeg command - use complexFilter properly without conflicting options
-    ffmpeg()
-      .input(layer1.localPath)
-      .inputOptions(['-loop 1', `-t ${duration}`])
-      .input(layer2.localPath)
-      .inputOptions(['-loop 1', `-t ${duration}`])
-      .complexFilter([
-        // Scale both images and create final composition
+      // Build FFmpeg command with audio support
+      let command = ffmpeg()
+        .input(layer1.localPath)
+        .inputOptions(['-loop 1', `-t ${duration}`])
+        .input(layer2.localPath)
+        .inputOptions(['-loop 1', `-t ${duration}`]);
+
+      // Add audio input if available
+      if (audioFile) {
+        command = command.input(audioFile.localPath);
+      }
+
+      // Build complex filter for video
+      const videoFilters = [
         `[0:v]scale=${layer1.width}:${layer1.height}[img1]`,
         `[1:v]scale=${layer2.width}:${layer2.height}[img2]`,
         `color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`,
         `[bg][img1]overlay=${left1}:${top1}[bg_with_img1]`,
         `[bg_with_img1][img2]overlay=${left2}:${top2}[final]`
-      ])
-      .outputOptions(['-map', '[final]'])
+      ];
+
+      command = command.complexFilter(videoFilters);
+
+      // Map video and audio outputs
+      if (audioFile) {
+        command = command
+          .outputOptions(['-map', '[final]'])
+          .outputOptions(['-map', '2:a']) // Map audio from third input
+          .audioCodec('aac');
+      } else {
+        command = command
+          .outputOptions(['-map', '[final]'])
+          .audioCodec('aac'); // Generate silent audio
+      }
+
+      command
+        .output(outputPath)
+        .videoCodec('libx264')
+        .format('mp4')
+        .outputOptions([
+          '-pix_fmt yuv420p',
+          '-preset fast',
+          '-crf 23'
+        ])
+        .on('start', (commandLine) => {
+          console.log('Multi-layer with audio FFmpeg command:', commandLine);
+        })
+        .on('progress', (progress) => {
+          const percent = Math.round(progress.percent || 0);
+          console.log(`Multi-layer with audio progress: ${percent}%`);
+
+          if (renderJobs.has(renderId)) {
+            const job = renderJobs.get(renderId);
+            job.progress = percent;
+            renderJobs.set(renderId, job);
+          }
+        })
+        .on('end', () => {
+          console.log('Multi-layer with audio composition completed successfully!');
+          resolve(outputPath);
+        })
+        .on('error', (err) => {
+          console.error('Multi-layer with audio FFmpeg error:', err);
+          console.error('Error details:', err.message);
+          reject(err);
+        })
+        .run();
+    });
+  } else {
+    throw new Error('Unsupported media combination');
+  }
+};
+
+// Function to create video with single image and audio
+const createVideoWithAudio = async (imageFile, audioFile, outputPath, width, height, duration, fps, renderId) => {
+  return new Promise((resolve, reject) => {
+    console.log(`Creating video with image and audio...`);
+    console.log(`Image: ${imageFile.localPath}`);
+    console.log(`Audio: ${audioFile.localPath}`);
+
+    ffmpeg()
+      .input(imageFile.localPath)
+      .inputOptions(['-loop 1', `-t ${duration}`])
+      .input(audioFile.localPath)
       .output(outputPath)
       .videoCodec('libx264')
       .audioCodec('aac')
       .format('mp4')
+      .size(`${width}x${height}`)
+      .fps(fps)
       .outputOptions([
         '-pix_fmt yuv420p',
         '-preset fast',
-        '-crf 23'
+        '-crf 23',
+        '-shortest'
       ])
       .on('start', (commandLine) => {
-        console.log('Fixed multi-layer FFmpeg command:', commandLine);
+        console.log('Image + Audio FFmpeg command:', commandLine);
       })
       .on('progress', (progress) => {
         const percent = Math.round(progress.percent || 0);
-        console.log(`Multi-layer overlay progress: ${percent}%`);
+        console.log(`Image + Audio progress: ${percent}%`);
 
         if (renderJobs.has(renderId)) {
           const job = renderJobs.get(renderId);
@@ -645,11 +731,11 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
         }
       })
       .on('end', () => {
-        console.log('Multi-layer overlay composition completed successfully!');
+        console.log('Image + Audio composition completed successfully!');
         resolve(outputPath);
       })
       .on('error', (err) => {
-        console.error('Multi-layer overlay FFmpeg error:', err);
+        console.error('Image + Audio FFmpeg error:', err);
         console.error('Error details:', err.message);
         reject(err);
       })
