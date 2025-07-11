@@ -9,21 +9,34 @@ import fetch from 'node-fetch';
 
 const API_BASE = 'http://localhost:3000/api/v1/editor';
 
-// Sample project data with actual media files (similar to what the frontend sends)
+// Your latest exact payload structure with audio + 2 overlapping images
 const sampleProjectData = {
-  id: 'test-project-' + Date.now(),
+  id: 'Mw4nobp7BqKHuE4',
   fps: 30,
   tracks: [
     {
-      id: 'track-1',
-      type: 'video',
-      trackItems: [
-        {
-          id: 'item-1',
-          duration: 5000, // 5 seconds in milliseconds
-          type: 'image'
-        }
-      ]
+      id: 'x3i-fVMBw9RS2BF4uDN_m',
+      accepts: ['text', 'audio', 'helper', 'video', 'image', 'caption'],
+      type: 'audio',
+      items: ['wxb2ETdQrz1Hol2'],
+      magnetic: false,
+      static: false
+    },
+    {
+      id: 'tpq0DO_7jClQNajyW4djh',
+      accepts: ['text', 'audio', 'helper', 'video', 'image', 'caption'],
+      type: 'image',
+      items: ['l1iS5ZeTi6rHBmC'],
+      magnetic: false,
+      static: false
+    },
+    {
+      id: 'DZAGQmvxsgixlR_pXzdvK',
+      accepts: ['text', 'audio', 'helper', 'video', 'image', 'caption'],
+      type: 'image',
+      items: ['HsJJosOuUv1uKkyx'],
+      magnetic: false,
+      static: false
     }
   ],
   size: {
@@ -31,29 +44,109 @@ const sampleProjectData = {
     height: 1920
   },
   trackItemDetailsMap: {
-    'item-1': {
+    'HsJJosOuUv1uKkyx': {
+      type: 'image',
       details: {
-        type: 'image',
-        src: 'https://ik.imagekit.io/wombo/images/img1.jpg', // External image URL
-        width: 1080,
+        src: 'https://ik.imagekit.io/wombo/images/img4.jpg',
+        width: 1280,
         height: 1920,
-        top: 0,
-        left: 0,
         opacity: 100,
-        display: {
-          from: 0,
-          duration: 5000
-        }
+        transform: 'scale(0.84375)',
+        border: 'none',
+        borderRadius: 0,
+        boxShadow: {
+          color: '#000000',
+          x: 0,
+          y: 0,
+          blur: 0
+        },
+        top: '0px',
+        left: '-100px',
+        borderWidth: 0,
+        borderColor: '#000000',
+        blur: 0,
+        brightness: 100,
+        flipX: false,
+        flipY: false
+      }
+    },
+    'l1iS5ZeTi6rHBmC': {
+      type: 'image',
+      details: {
+        src: 'https://ik.imagekit.io/wombo/images/img1.jpg',
+        width: 1280,
+        height: 853,
+        opacity: 100,
+        transform: 'scale(0.84375)',
+        border: 'none',
+        borderRadius: 0,
+        boxShadow: {
+          color: '#000000',
+          x: 0,
+          y: 0,
+          blur: 0
+        },
+        top: '533.5px',
+        left: '-100px',
+        borderWidth: 0,
+        borderColor: '#000000',
+        blur: 0,
+        brightness: 100,
+        flipX: false,
+        flipY: false
+      }
+    },
+    'wxb2ETdQrz1Hol2': {
+      type: 'audio',
+      details: {
+        src: 'https://ik.imagekit.io/snapmotion/timer-voice.mp3',
+        duration: 50503.401,
+        volume: 100
       }
     }
   },
-  trackItemIds: ['item-1'],
+  trackItemIds: ['HsJJosOuUv1uKkyx', 'l1iS5ZeTi6rHBmC', 'wxb2ETdQrz1Hol2'],
   transitionsMap: {},
   trackItemsMap: {
-    'item-1': {
-      id: 'item-1',
-      duration: 5000,
-      type: 'image'
+    'HsJJosOuUv1uKkyx': {
+      id: 'HsJJosOuUv1uKkyx',
+      type: 'image',
+      name: 'image',
+      display: {
+        from: 0,
+        to: 5000
+      },
+      playbackRate: 1,
+      metadata: {},
+      isMain: false
+    },
+    'l1iS5ZeTi6rHBmC': {
+      id: 'l1iS5ZeTi6rHBmC',
+      type: 'image',
+      name: 'image',
+      display: {
+        from: 851.0638297872341,
+        to: 5851.063829787234
+      },
+      playbackRate: 1,
+      metadata: {},
+      isMain: false
+    },
+    'wxb2ETdQrz1Hol2': {
+      id: 'wxb2ETdQrz1Hol2',
+      name: '',
+      type: 'audio',
+      display: {
+        from: 0,
+        to: 6489.361702127659
+      },
+      trim: {
+        from: 44014.03929787231,
+        to: 50503.401
+      },
+      playbackRate: 1,
+      metadata: {},
+      isMain: false
     }
   },
   transitionIds: []
