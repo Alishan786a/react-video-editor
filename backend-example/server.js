@@ -292,15 +292,15 @@ const createVideoFromProject = async (projectData, renderId) => {
       let totalDuration = 5; // Default 5 seconds
       if (trackItemIds.length > 0) {
         const maxEndTime = trackItemIds.reduce((max, itemId) => {
-          const itemDetails = trackItemDetailsMap[itemId];
-          if (itemDetails && itemDetails.details) {
-            const startTime = itemDetails.details.display?.from || 0;
-            const duration = itemDetails.details.display?.duration || 5000;
-            return Math.max(max, startTime + duration);
+          const trackItem = trackItemsMap[itemId];
+          if (trackItem && trackItem.display) {
+            const endTime = trackItem.display.to || 5000; // Use 'to' value directly
+            return Math.max(max, endTime);
           }
           return max;
         }, 0);
         totalDuration = Math.max(5, Math.ceil(maxEndTime / 1000)); // Convert ms to seconds, minimum 5s
+        console.log(`Calculated video duration: ${totalDuration}s (maxEndTime: ${maxEndTime}ms)`);
       }
 
       console.log(`Creating video: ${width}x${height}, ${fps}fps, ${totalDuration}s`);
@@ -501,36 +501,85 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
   return new Promise((resolve, reject) => {
     if (mediaFile.type === 'image') {
       console.log(`Creating video from single image: ${mediaFile.localPath}`);
+      console.log(`Image timing: ${mediaFile.startTime}s to ${mediaFile.endTime}s (duration: ${mediaFile.duration}s)`);
 
-      ffmpeg()
-        .input(mediaFile.localPath)
-        .inputOptions(['-loop 1', `-t ${duration}`])
-        .output(outputPath)
-        .videoCodec('libx264')
-        .audioCodec('aac')
-        .format('mp4')
-        .size(`${width}x${height}`)
-        .fps(fps)
-        .outputOptions(['-pix_fmt yuv420p', '-preset fast', '-crf 23', '-shortest'])
-        .on('start', (commandLine) => console.log('FFmpeg command:', commandLine))
-        .on('progress', (progress) => {
-          const percent = Math.round(progress.percent || 0);
-          console.log(`Rendering progress: ${percent}%`);
-          if (renderJobs.has(renderId)) {
-            const job = renderJobs.get(renderId);
-            job.progress = percent;
-            renderJobs.set(renderId, job);
-          }
-        })
-        .on('end', () => {
-          console.log('Single image video completed');
-          resolve(outputPath);
-        })
-        .on('error', (err) => {
-          console.error('FFmpeg single image error:', err);
-          reject(err);
-        })
-        .run();
+      // Check if image has timing constraints
+      if (mediaFile.startTime > 0 || mediaFile.endTime < duration) {
+        console.log('Applying timing constraints to single image');
+
+        // Use complex filter to apply timing constraints
+        const complexFilters = [
+          `[0:v]scale=${width}:${height}[img_scaled]`,
+          `color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`,
+          `[bg][img_scaled]overlay=0:0:enable='between(t,${mediaFile.startTime},${mediaFile.endTime})'[final]`
+        ];
+
+        ffmpeg()
+          .input(mediaFile.localPath)
+          .inputOptions(['-loop 1', `-t ${duration}`])
+          .complexFilter(complexFilters)
+          .output(outputPath)
+          .videoCodec('libx264')
+          .audioCodec('aac')
+          .format('mp4')
+          .fps(fps)
+          .outputOptions([
+            '-map', '[final]',
+            '-pix_fmt yuv420p',
+            '-preset fast',
+            '-crf 23'
+          ])
+          .on('start', (commandLine) => console.log('FFmpeg command with timing:', commandLine))
+          .on('progress', (progress) => {
+            const percent = Math.round(progress.percent || 0);
+            console.log(`Rendering progress: ${percent}%`);
+            if (renderJobs.has(renderId)) {
+              const job = renderJobs.get(renderId);
+              job.progress = percent;
+              renderJobs.set(renderId, job);
+            }
+          })
+          .on('end', () => {
+            console.log('Single image video with timing completed');
+            resolve(outputPath);
+          })
+          .on('error', (err) => {
+            console.error('FFmpeg single image with timing error:', err);
+            reject(err);
+          })
+          .run();
+      } else {
+        // No timing constraints, use simple approach
+        ffmpeg()
+          .input(mediaFile.localPath)
+          .inputOptions(['-loop 1', `-t ${duration}`])
+          .output(outputPath)
+          .videoCodec('libx264')
+          .audioCodec('aac')
+          .format('mp4')
+          .size(`${width}x${height}`)
+          .fps(fps)
+          .outputOptions(['-pix_fmt yuv420p', '-preset fast', '-crf 23', '-shortest'])
+          .on('start', (commandLine) => console.log('FFmpeg command:', commandLine))
+          .on('progress', (progress) => {
+            const percent = Math.round(progress.percent || 0);
+            console.log(`Rendering progress: ${percent}%`);
+            if (renderJobs.has(renderId)) {
+              const job = renderJobs.get(renderId);
+              job.progress = percent;
+              renderJobs.set(renderId, job);
+            }
+          })
+          .on('end', () => {
+            console.log('Single image video completed');
+            resolve(outputPath);
+          })
+          .on('error', (err) => {
+            console.error('FFmpeg single image error:', err);
+            reject(err);
+          })
+          .run();
+      }
 
     } else if (mediaFile.type === 'video') {
       console.log(`Processing single video: ${mediaFile.localPath}`);
