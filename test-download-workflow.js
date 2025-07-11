@@ -9,7 +9,7 @@ import fetch from 'node-fetch';
 
 const API_BASE = 'http://localhost:3000/api/v1/editor';
 
-// Sample project data (similar to what the frontend sends)
+// Sample project data with actual media files (similar to what the frontend sends)
 const sampleProjectData = {
   id: 'test-project-' + Date.now(),
   fps: 30,
@@ -21,7 +21,7 @@ const sampleProjectData = {
         {
           id: 'item-1',
           duration: 5000, // 5 seconds in milliseconds
-          type: 'video'
+          type: 'image'
         }
       ]
     }
@@ -30,14 +30,30 @@ const sampleProjectData = {
     width: 1080,
     height: 1920
   },
-  trackItemDetailsMap: {},
+  trackItemDetailsMap: {
+    'item-1': {
+      details: {
+        type: 'image',
+        src: 'https://ik.imagekit.io/wombo/images/img1.jpg', // External image URL
+        width: 1080,
+        height: 1920,
+        top: 0,
+        left: 0,
+        opacity: 100,
+        display: {
+          from: 0,
+          duration: 5000
+        }
+      }
+    }
+  },
   trackItemIds: ['item-1'],
   transitionsMap: {},
   trackItemsMap: {
     'item-1': {
       id: 'item-1',
       duration: 5000,
-      type: 'video'
+      type: 'image'
     }
   },
   transitionIds: []
