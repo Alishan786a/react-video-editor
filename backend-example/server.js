@@ -299,8 +299,10 @@ const createVideoFromProject = async (projectData, renderId) => {
           }
           return max;
         }, 0);
-        totalDuration = Math.max(5, Math.ceil(maxEndTime / 1000)); // Convert ms to seconds, minimum 5s
-        console.log(`Calculated video duration: ${totalDuration}s (maxEndTime: ${maxEndTime}ms)`);
+        // Use precise duration calculation - convert ms to seconds with precision
+        const preciseDuration = maxEndTime / 1000;
+        totalDuration = Math.max(5, preciseDuration); // Minimum 5s, but keep precision
+        console.log(`Calculated video duration: ${totalDuration}s (maxEndTime: ${maxEndTime}ms, precise: ${preciseDuration}s)`);
       }
 
       console.log(`Creating video: ${width}x${height}, ${fps}fps, ${totalDuration}s`);
