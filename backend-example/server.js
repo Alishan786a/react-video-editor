@@ -743,28 +743,61 @@ const createVideoWithAudio = async (imageFile, audioFile, outputPath, width, hei
   });
 };
 
-// Video rendering endpoint
+// Enhanced video rendering endpoint with improved payload support
 app.post('/api/v1/editor/render', async (req, res) => {
   try {
-    const projectData = req.body;
+    // Support both old format (direct project data) and new format (design + options)
+    let projectData, options;
+
+    if (req.body.design && req.body.options) {
+      // New format from react-video-editor-1
+      projectData = req.body.design;
+      options = req.body.options;
+      console.log('New format detected - design + options structure');
+    } else {
+      // Old format (direct project data)
+      projectData = req.body;
+      options = {
+        fps: projectData.fps || 30,
+        size: projectData.size || { width: 1080, height: 1920 },
+        format: 'mp4'
+      };
+      console.log('Legacy format detected - direct project data');
+    }
+
     const renderId = uuidv4();
 
-    console.log('Render request received:', { renderId, projectKeys: Object.keys(projectData) });
+    console.log('Enhanced render request received:', {
+      renderId,
+      projectKeys: Object.keys(projectData),
+      options: options,
+      trackItemCount: projectData.trackItemIds?.length || 0,
+      tracksCount: projectData.tracks?.length || 0
+    });
 
-    // Store job in memory
+    // Store job in memory with enhanced structure
     renderJobs.set(renderId, {
       id: renderId,
       status: 'processing',
       progress: 0,
       createdAt: new Date(),
-      projectData
+      projectData,
+      options,
+      format: options.format || 'mp4'
     });
 
+    // Return response compatible with both formats
     res.json({
       success: true,
       renderId: renderId,
       status: 'processing',
-      message: 'Render job started successfully'
+      message: 'Render job started successfully',
+      video: {
+        id: renderId,
+        status: 'PENDING',
+        progress: 0
+      },
+      options: options
     });
 
     // Start rendering in background
@@ -802,7 +835,7 @@ app.post('/api/v1/editor/render', async (req, res) => {
   }
 });
 
-// Check render status endpoint
+// Enhanced render status endpoint with detailed information
 app.get('/api/v1/editor/render/status/:renderId', async (req, res) => {
   try {
     const { renderId } = req.params;
@@ -810,13 +843,26 @@ app.get('/api/v1/editor/render/status/:renderId', async (req, res) => {
     if (!renderJobs.has(renderId)) {
       return res.status(404).json({
         error: 'Render job not found',
-        renderId
+        renderId,
+        video: {
+          id: renderId,
+          status: 'NOT_FOUND',
+          progress: 0
+        }
       });
     }
 
     const job = renderJobs.get(renderId);
 
-    res.json({
+    // Map internal status to external status
+    const statusMap = {
+      'processing': 'PENDING',
+      'completed': 'COMPLETED',
+      'failed': 'FAILED'
+    };
+
+    const response = {
+      success: true,
       render: {
         renderId: job.id,
         projectId: job.projectData?.id,
@@ -825,13 +871,183 @@ app.get('/api/v1/editor/render/status/:renderId', async (req, res) => {
         output: job.output,
         createdAt: job.createdAt,
         updatedAt: job.completedAt || job.failedAt || job.createdAt,
-        error: job.error
+        error: job.error,
+        format: job.format || 'mp4',
+        options: job.options
+      },
+      // Additional format for compatibility
+      video: {
+        id: job.id,
+        status: statusMap[job.status] || 'UNKNOWN',
+        progress: job.progress,
+        url: job.output,
+        downloadUrl: job.output,
+        createdAt: job.createdAt?.toISOString(),
+        updatedAt: (job.completedAt || job.failedAt || job.createdAt)?.toISOString(),
+        metadata: {
+          format: job.format || 'mp4',
+          size: job.options?.size,
+          fps: job.options?.fps,
+          duration: job.projectData?.duration
+        }
+      }
+    };
+
+    res.json(response);
+
+  } catch (error) {
+    console.error('Error checking render status:', error);
+    res.status(500).json({
+      error: 'Failed to check render status',
+      video: {
+        id: renderId,
+        status: 'ERROR',
+        progress: 0
+      }
+    });
+  }
+});
+
+// Alternative API endpoint for compatibility with react-video-editor-1
+app.post('/api/render', async (req, res) => {
+  try {
+    console.log('Alternative render endpoint called');
+
+    // Extract design and options from request body
+    const { design, options } = req.body;
+
+    if (!design) {
+      return res.status(400).json({
+        error: 'Design object is required',
+        message: 'Please provide a design object in the request body'
+      });
+    }
+
+    const renderId = uuidv4();
+    const renderOptions = {
+      fps: options?.fps || design.fps || 30,
+      size: options?.size || design.size || { width: 1080, height: 1920 },
+      format: options?.format || 'mp4'
+    };
+
+    console.log('Alternative render request:', {
+      renderId,
+      designKeys: Object.keys(design),
+      options: renderOptions,
+      trackItemCount: design.trackItemIds?.length || 0
+    });
+
+    // Store job in memory
+    renderJobs.set(renderId, {
+      id: renderId,
+      status: 'processing',
+      progress: 0,
+      createdAt: new Date(),
+      projectData: design,
+      options: renderOptions,
+      format: renderOptions.format
+    });
+
+    // Return response in react-video-editor-1 format
+    res.json({
+      success: true,
+      video: {
+        id: renderId,
+        status: 'PENDING',
+        progress: 0,
+        createdAt: new Date().toISOString()
+      },
+      renderId: renderId,
+      message: 'Render job started successfully'
+    });
+
+    // Start rendering in background (same logic as main endpoint)
+    try {
+      const outputPath = await createVideoFromProject(design, renderId);
+      const outputUrl = `http://localhost:${PORT}/api/v1/editor/files/renders/${renderId}.mp4`;
+
+      // Update job status
+      renderJobs.set(renderId, {
+        ...renderJobs.get(renderId),
+        status: 'completed',
+        progress: 100,
+        output: outputUrl,
+        outputPath,
+        completedAt: new Date()
+      });
+
+      console.log(`Alternative render job ${renderId} completed: ${outputUrl}`);
+    } catch (error) {
+      console.error(`Alternative render job ${renderId} failed:`, error);
+      renderJobs.set(renderId, {
+        ...renderJobs.get(renderId),
+        status: 'failed',
+        error: error.message,
+        failedAt: new Date()
+      });
+    }
+
+  } catch (error) {
+    console.error('Error in alternative render endpoint:', error);
+    res.status(500).json({
+      error: 'Failed to start render',
+      message: error.message
+    });
+  }
+});
+
+// Alternative status endpoint for compatibility
+app.get('/api/render/status/:renderId', async (req, res) => {
+  try {
+    const { renderId } = req.params;
+
+    if (!renderJobs.has(renderId)) {
+      return res.status(404).json({
+        error: 'Render job not found',
+        video: {
+          id: renderId,
+          status: 'NOT_FOUND',
+          progress: 0
+        }
+      });
+    }
+
+    const job = renderJobs.get(renderId);
+
+    const statusMap = {
+      'processing': 'PENDING',
+      'completed': 'COMPLETED',
+      'failed': 'FAILED'
+    };
+
+    res.json({
+      success: true,
+      video: {
+        id: job.id,
+        status: statusMap[job.status] || 'UNKNOWN',
+        progress: job.progress,
+        url: job.output,
+        downloadUrl: job.output,
+        createdAt: job.createdAt?.toISOString(),
+        updatedAt: (job.completedAt || job.failedAt || job.createdAt)?.toISOString(),
+        metadata: {
+          format: job.format || 'mp4',
+          size: job.options?.size,
+          fps: job.options?.fps
+        }
       }
     });
 
   } catch (error) {
-    console.error('Error checking render status:', error);
-    res.status(500).json({ error: 'Failed to check render status' });
+    console.error('Error checking alternative render status:', error);
+    res.status(500).json({
+      error: 'Failed to check render status',
+      video: {
+        id: renderId,
+        status: 'ERROR',
+        progress: 0
+      }
+    });
   }
 });
 
