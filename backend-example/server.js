@@ -602,6 +602,8 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
 
     console.log(`Layer 1: ${layer1.src} at ${layer1.left},${layer1.top} (${layer1.startTime}s-${layer1.startTime + layer1.duration}s)`);
     console.log(`Layer 2: ${layer2.src} at ${layer2.left},${layer2.top} (${layer2.startTime}s-${layer2.startTime + layer2.duration}s)`);
+    console.log(`Layer 1 timing: show between ${layer1.startTime}s and ${layer1.startTime + layer1.duration}s`);
+    console.log(`Layer 2 timing: show between ${layer2.startTime}s and ${layer2.startTime + layer2.duration}s`);
     if (audioFile) {
       console.log(`Audio: ${audioFile.src} (${audioFile.startTime}s-${audioFile.startTime + audioFile.duration}s)`);
     }
@@ -633,13 +635,15 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
         command = command.input(audioFile.localPath);
       }
 
-      // Build complex filter for video
+      // Build complex filter for video with proper timing constraints
       const videoFilters = [
         `[0:v]scale=${layer1.width}:${layer1.height}[img1]`,
         `[1:v]scale=${layer2.width}:${layer2.height}[img2]`,
         `color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`,
-        `[bg][img1]overlay=${left1}:${top1}[bg_with_img1]`,
-        `[bg_with_img1][img2]overlay=${left2}:${top2}[final]`
+        // Overlay with timing - layer 1 first (only show during its time range)
+        `[bg][img1]overlay=${left1}:${top1}:enable='between(t,${layer1.startTime},${layer1.startTime + layer1.duration})'[bg_with_img1]`,
+        // Then layer 2 on top (only show during its time range)
+        `[bg_with_img1][img2]overlay=${left2}:${top2}:enable='between(t,${layer2.startTime},${layer2.startTime + layer2.duration})'[final]`
       ];
 
       command = command.complexFilter(videoFilters);

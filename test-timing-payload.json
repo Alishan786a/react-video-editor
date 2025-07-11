@@ -1,0 +1,109 @@
+{
+  "id": "Vkw9CJmhHohpBZd",
+  "fps": 30,
+  "tracks": [
+    {
+      "id": "bgqCUt5b8ekqxyDASFwZG",
+      "accepts": ["text", "audio", "helper", "video", "image", "caption"],
+      "type": "image",
+      "items": ["IkZVEGOVhRhQ8VOL"],
+      "magnetic": false,
+      "static": false
+    },
+    {
+      "id": "Hgcft8Fq6f7ZoynAVpFhy",
+      "accepts": ["text", "audio", "helper", "video", "image", "caption"],
+      "type": "image",
+      "items": ["oWJ5GlL4ovzPgGot"],
+      "magnetic": false,
+      "static": false
+    }
+  ],
+  "size": {
+    "width": 1080,
+    "height": 1920
+  },
+  "trackItemDetailsMap": {
+    "oWJ5GlL4ovzPgGot": {
+      "type": "image",
+      "details": {
+        "src": "https://ik.imagekit.io/wombo/images/img4.jpg",
+        "width": 1280,
+        "height": 1920,
+        "opacity": 100,
+        "transform": "scale(0.84375)",
+        "border": "none",
+        "borderRadius": 0,
+        "boxShadow": {
+          "color": "#000000",
+          "x": 0,
+          "y": 0,
+          "blur": 0
+        },
+        "top": "0px",
+        "left": "-100px",
+        "borderWidth": 0,
+        "borderColor": "#000000",
+        "blur": 0,
+        "brightness": 100,
+        "flipX": false,
+        "flipY": false
+      }
+    },
+    "IkZVEGOVhRhQ8VOL": {
+      "type": "image",
+      "details": {
+        "src": "https://ik.imagekit.io/wombo/images/img1.jpg",
+        "width": 1280,
+        "height": 853,
+        "opacity": 100,
+        "transform": "scale(0.84375)",
+        "border": "none",
+        "borderRadius": 0,
+        "boxShadow": {
+          "color": "#000000",
+          "x": 0,
+          "y": 0,
+          "blur": 0
+        },
+        "top": "533.5px",
+        "left": "-100px",
+        "borderWidth": 0,
+        "borderColor": "#000000",
+        "blur": 0,
+        "brightness": 100,
+        "flipX": false,
+        "flipY": false
+      }
+    }
+  },
+  "trackItemIds": ["oWJ5GlL4ovzPgGot", "IkZVEGOVhRhQ8VOL"],
+  "transitionsMap": {},
+  "trackItemsMap": {
+    "oWJ5GlL4ovzPgGot": {
+      "id": "oWJ5GlL4ovzPgGot",
+      "type": "image",
+      "name": "image",
+      "display": {
+        "from": 0,
+        "to": 5000
+      },
+      "playbackRate": 1,
+      "metadata": {},
+      "isMain": false
+    },
+    "IkZVEGOVhRhQ8VOL": {
+      "id": "IkZVEGOVhRhQ8VOL",
+      "type": "image",
+      "name": "image",
+      "display": {
+        "from": 829.7872340425533,
+        "to": 5829.787234042553
+      },
+      "playbackRate": 1,
+      "metadata": {},
+      "isMain": false
+    }
+  },
+  "transitionIds": []
+}
