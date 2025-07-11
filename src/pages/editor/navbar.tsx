@@ -12,6 +12,8 @@ import { ChevronDown, Download } from "lucide-react";
 import { Label } from "@/components/ui/label";
 import { Progress } from "@/components/ui/progress";
 import { download } from "@/utils/download";
+import { debugDownload } from "@/utils/downloadDebug";
+import { quickTestDownload } from "@/utils/quickTest";
 import { API_ENDPOINTS } from "@/config/api";
 
 
@@ -163,19 +165,33 @@ const DownloadPopover = () => {
           }
 
           const result = await response.json();
+          console.log('Render status response:', result);
 
           if (result.render) {
             const { progress, output, status } = result.render;
+            console.log('Render details:', { progress, output, status });
 
             if (status === 'completed' && progress === 100 && output) {
               clearInterval(interval);
+              console.log('Video rendering completed, starting download:', output);
+
+              // Debug the download URL before attempting download
+              console.log('Running download debug check...');
+              const debugResult = await debugDownload(output);
+
+              if (!debugResult) {
+                console.error('Debug check failed - download may not work properly');
+              }
+
               setDownloadState({
                 ...downloadState,
                 renderId: "",
                 progress: 0,
                 isDownloading: false
               });
-              download(output, `video_${downloadState.renderId}`);
+
+              // Start download
+              await download(output, `video_${downloadState.renderId}`);
               setOpen(false);
             } else if (status === 'failed') {
               clearInterval(interval);
@@ -238,8 +254,29 @@ const DownloadPopover = () => {
                 {parseInt(downloadState.progress.toString())}%
               </div>
             </div>
-            <div>
-              <Button className="w-full">Copy link</Button>
+            <div className="flex gap-1">
+              <Button className="flex-1" size="sm">Copy link</Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  // Quick test to see what backend returns
+                  quickTestDownload();
+                }}
+              >
+                Test
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  // Full debug
+                  const testUrl = "http://localhost:3000/api/v1/editor/files/renders/test.mp4";
+                  debugDownload(testUrl);
+                }}
+              >
+                Debug
+              </Button>
             </div>
           </>
         ) : (
