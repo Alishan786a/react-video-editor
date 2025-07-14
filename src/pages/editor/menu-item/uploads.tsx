@@ -3,6 +3,7 @@ import { IUpload } from "@/interfaces/editor";
 import { ADD_VIDEO, ADD_IMAGE, ADD_AUDIO, dispatch } from "@designcombo/events";
 import { generateId } from "@designcombo/timeline";
 import { UploadForm, UploadsList } from "@/components/uploads";
+import { useEffect } from "react";
 
 // Helper function to determine file type
 const getFileType = (filename: string): 'video' | 'image' | 'audio' => {
@@ -19,7 +20,26 @@ const getFileType = (filename: string): 'video' | 'image' | 'audio' => {
 };
 
 export const Uploads = () => {
-  const { uploads, addUpload, removeUpload } = useDataState();
+  const { uploads, addUpload, removeUpload, setUploads } = useDataState();
+
+  // Load existing uploads on component mount
+  useEffect(() => {
+    const loadUploads = async () => {
+      try {
+        const response = await fetch('http://localhost:3000/api/v1/editor/upload/files');
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success) {
+            setUploads(data.files);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load uploads:', error);
+      }
+    };
+
+    loadUploads();
+  }, [setUploads]);
 
   const handleAddToTimeline = (upload: IUpload) => {
     const fileType = getFileType(upload.originalName);

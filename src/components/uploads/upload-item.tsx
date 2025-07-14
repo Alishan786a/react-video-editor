@@ -128,11 +128,15 @@ export const UploadItem = ({ upload, onAddToTimeline, onRemove }: UploadItemProp
         audioRef.current.pause();
         setIsAudioPlaying(false);
       } else {
-        audioRef.current.play();
+        audioRef.current.play().catch(error => {
+          console.error('Error playing audio:', error);
+        });
         setIsAudioPlaying(true);
       }
     }
   };
+
+
 
   const toggleAudioPreview = (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
