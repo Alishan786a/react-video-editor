@@ -667,87 +667,115 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
 
   // Handle different scenarios
   if (imageFiles.length === 1 && audioFiles.length === 1) {
-    // Single image + audio
+    // Single image + single audio
     return createVideoWithAudio(imageFiles[0], audioFiles[0], outputPath, width, height, duration, fps, renderId);
-  } else if (imageFiles.length >= 2) {
-    // Multiple images (with or without audio)
-    const layer1 = imageFiles[0];
-    const layer2 = imageFiles[1];
-    const audioFile = audioFiles.length > 0 ? audioFiles[0] : null;
-
-    console.log(`Layer 1: ${layer1.src} at ${layer1.left},${layer1.top} (${layer1.startTime}s-${layer1.startTime + layer1.duration}s)`);
-    console.log(`Layer 2: ${layer2.src} at ${layer2.left},${layer2.top} (${layer2.startTime}s-${layer2.startTime + layer2.duration}s)`);
-    console.log(`Layer 1 timing: show between ${layer1.startTime}s and ${layer1.endTime}s`);
-    console.log(`Layer 2 timing: show between ${layer2.startTime}s and ${layer2.endTime}s`);
-    if (audioFile) {
-      console.log(`Audio: ${audioFile.src} (${audioFile.startTime}s-${audioFile.endTime}s)`);
-    }
+  } else if (imageFiles.length === 1 && audioFiles.length > 1) {
+    // Single image + multiple audio - use multi-layer approach
+    console.log(`Single image with ${audioFiles.length} audio tracks - using multi-layer composition`);
+    // Fall through to multi-layer logic
+  } else if (imageFiles.length >= 2 || (imageFiles.length === 1 && audioFiles.length > 1)) {
+    // Multiple images (with or without audio) - FIXED: Handle ALL images and ALL audio tracks
+    console.log('Multi-layer composition with ALL images and ALL audio:');
+    imageFiles.forEach((layer, index) => {
+      console.log(`  Layer ${index + 1}: ${layer.src} at ${layer.left},${layer.top} (${layer.startTime}s-${layer.endTime}s)`);
+    });
+    audioFiles.forEach((audio, index) => {
+      console.log(`  Audio ${index + 1}: ${audio.src} (${audio.startTime}s-${audio.endTime}s)`);
+      if (audio.trimStart !== 0 || audio.trimDuration !== null) {
+        console.log(`    Trim: ${audio.trimStart}s to ${audio.trimEnd}s (duration: ${audio.trimDuration}s)`);
+      }
+    });
 
     return new Promise((resolve, reject) => {
-      // Create multi-layer composition with optional audio
-      const left1 = parseInt(String(layer1.left).replace('px', '')) || 0;
-      const top1 = parseInt(String(layer1.top).replace('px', '')) || 0;
-      const left2 = parseInt(String(layer2.left).replace('px', '')) || 0;
-      const top2 = parseInt(String(layer2.top).replace('px', '')) || 0;
-
-      console.log('Creating multi-layer composition with audio...');
+      console.log('Creating dynamic multi-layer composition with audio...');
       console.log(`Background: black ${width}x${height}`);
-      console.log(`Layer 1: ${layer1.width}x${layer1.height} at ${left1},${top1}`);
-      console.log(`Layer 2: ${layer2.width}x${layer2.height} at ${left2},${top2}`);
-      if (audioFile) {
-        console.log(`Audio: ${audioFile.localPath}`);
-      }
 
-      // Build FFmpeg command with audio support
-      let command = ffmpeg()
-        .input(layer1.localPath)
-        .inputOptions(['-loop 1', `-t ${duration}`])
-        .input(layer2.localPath)
-        .inputOptions(['-loop 1', `-t ${duration}`]);
+      // Build FFmpeg command with all image inputs
+      let command = ffmpeg();
 
-      // Add audio input if available
-      if (audioFile) {
-        command = command.input(audioFile.localPath);
-      }
+      // Add all image inputs
+      imageFiles.forEach((layer, index) => {
+        command = command
+          .input(layer.localPath)
+          .inputOptions(['-loop 1', `-t ${duration}`]);
+
+        const left = parseInt(String(layer.left).replace('px', '')) || 0;
+        const top = parseInt(String(layer.top).replace('px', '')) || 0;
+        console.log(`Layer ${index + 1}: ${layer.width}x${layer.height} at ${left},${top}`);
+      });
+
+      // Add all audio inputs
+      audioFiles.forEach((audio, index) => {
+        command = command.input(audio.localPath);
+        console.log(`Audio ${index + 1}: ${audio.localPath}`);
+      });
 
       // Build complex filter for video and audio with proper timing constraints
-      const complexFilters = [
-        // Video filters
-        `[0:v]scale=${layer1.width}:${layer1.height}[img1]`,
-        `[1:v]scale=${layer2.width}:${layer2.height}[img2]`,
-        `color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`,
-        // Overlay with timing - layer 1 first (only show during its time range)
-        `[bg][img1]overlay=${left1}:${top1}:enable='between(t,${layer1.startTime},${layer1.endTime})'[bg_with_img1]`,
-        // Then layer 2 on top (only show during its time range)
-        `[bg_with_img1][img2]overlay=${left2}:${top2}:enable='between(t,${layer2.startTime},${layer2.endTime})'[final]`
-      ];
+      const complexFilters = [];
 
-      // Add audio timing filter if audio is present
-      if (audioFile) {
-        console.log(`Audio timing: ${audioFile.startTime}s to ${audioFile.endTime}s (duration: ${audioFile.duration}s)`);
+      // Scale all images
+      imageFiles.forEach((layer, index) => {
+        complexFilters.push(`[${index}:v]scale=${layer.width}:${layer.height}[img${index + 1}]`);
+      });
 
-        // Build audio filter based on whether trim information is available
-        let audioFilter;
-        if (audioFile.trimStart !== undefined && audioFile.trimDuration !== undefined) {
-          console.log(`Audio trim: extracting ${audioFile.trimStart}s to ${audioFile.trimStart + audioFile.trimDuration}s from original audio`);
-          // First trim the audio to extract the desired segment, then position it in timeline
-          audioFilter = `[2:a]atrim=start=${audioFile.trimStart}:duration=${audioFile.trimDuration},asetpts=PTS-STARTPTS,adelay=${audioFile.startTime * 1000}|${audioFile.startTime * 1000}[audio_timed]`;
-        } else {
-          // No trim info, use original logic
-          audioFilter = `[2:a]atrim=start=${audioFile.startTime}:duration=${audioFile.duration},asetpts=PTS-STARTPTS,adelay=${audioFile.startTime * 1000}|${audioFile.startTime * 1000}[audio_timed]`;
+      // Create background
+      complexFilters.push(`color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`);
+
+      // Build overlay chain - each image overlays on the previous result
+      let currentLayer = 'bg';
+      imageFiles.forEach((layer, index) => {
+        const left = parseInt(String(layer.left).replace('px', '')) || 0;
+        const top = parseInt(String(layer.top).replace('px', '')) || 0;
+        const nextLayer = index === imageFiles.length - 1 ? 'final' : `bg_with_img${index + 1}`;
+
+        complexFilters.push(
+          `[${currentLayer}][img${index + 1}]overlay=${left}:${top}:enable='between(t,${layer.startTime},${layer.endTime})'[${nextLayer}]`
+        );
+
+        currentLayer = nextLayer;
+      });
+
+      // Add audio timing filters for all audio tracks
+      if (audioFiles.length > 0) {
+        console.log(`Processing ${audioFiles.length} audio tracks...`);
+
+        audioFiles.forEach((audioFile, index) => {
+          console.log(`Audio ${index + 1} timing: ${audioFile.startTime}s to ${audioFile.endTime}s (duration: ${audioFile.duration}s)`);
+
+          // Build audio filter based on whether trim information is available
+          const audioInputIndex = imageFiles.length + index; // Audio inputs come after all image inputs
+
+          if (audioFile.trimStart !== undefined && audioFile.trimDuration !== undefined) {
+            console.log(`Audio ${index + 1} trim: extracting ${audioFile.trimStart}s to ${audioFile.trimStart + audioFile.trimDuration}s from original audio`);
+            // First trim the audio to extract the desired segment, then position it in timeline
+            const audioFilter = `[${audioInputIndex}:a]atrim=start=${audioFile.trimStart}:duration=${audioFile.trimDuration},asetpts=PTS-STARTPTS,adelay=${audioFile.startTime * 1000}|${audioFile.startTime * 1000}[audio${index + 1}_timed]`;
+            complexFilters.push(audioFilter);
+          } else {
+            // No trim info, use original logic
+            const audioFilter = `[${audioInputIndex}:a]atrim=start=${audioFile.startTime}:duration=${audioFile.duration},asetpts=PTS-STARTPTS,adelay=${audioFile.startTime * 1000}|${audioFile.startTime * 1000}[audio${index + 1}_timed]`;
+            complexFilters.push(audioFilter);
+          }
+        });
+
+        // Mix all audio tracks together if there are multiple
+        if (audioFiles.length > 1) {
+          const audioInputs = audioFiles.map((_, index) => `[audio${index + 1}_timed]`).join('');
+          const mixFilter = `${audioInputs}amix=inputs=${audioFiles.length}:duration=longest[audio_mixed]`;
+          complexFilters.push(mixFilter);
+          console.log(`Mixing ${audioFiles.length} audio tracks together`);
         }
-
-        complexFilters.push(audioFilter);
       }
 
       command = command.complexFilter(complexFilters);
 
       // Map video and audio outputs
-      if (audioFile) {
+      if (audioFiles.length > 0) {
+        const audioOutput = audioFiles.length > 1 ? '[audio_mixed]' : '[audio1_timed]';
         command = command
           .outputOptions(['-map', '[final]'])
-          .outputOptions(['-map', '[audio_timed]']) // Map timed audio
+          .outputOptions(['-map', audioOutput]) // Map mixed or single audio
           .audioCodec('aac');
+        console.log(`Mapping audio output: ${audioOutput}`);
       } else {
         command = command
           .outputOptions(['-map', '[final]'])
