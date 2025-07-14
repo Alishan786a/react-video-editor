@@ -756,15 +756,23 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
       console.log(`Creating video from single image: ${mediaFile.localPath}`);
       console.log(`Image timing: ${mediaFile.startTime}s to ${mediaFile.endTime}s (duration: ${mediaFile.duration}s)`);
 
-      // Check if image has timing constraints
-      if (mediaFile.startTime > 0 || mediaFile.endTime < duration) {
-        console.log('Applying timing constraints to single image');
+      // Check if image has timing constraints or positioning
+      const left = parseInt(String(mediaFile.left).replace('px', '')) || 0;
+      const top = parseInt(String(mediaFile.top).replace('px', '')) || 0;
+      const hasPositioning = left !== 0 || top !== 0;
+      const hasTimingConstraints = mediaFile.startTime > 0 || mediaFile.endTime < duration;
 
-        // Use complex filter to apply timing constraints
+      if (hasTimingConstraints || hasPositioning) {
+        console.log('Applying timing constraints and/or positioning to single image');
+        console.log(`Image positioning: left=${left}, top=${top}`);
+
+        // Use complex filter to apply timing constraints and positioning
         const complexFilters = [
           `[0:v]scale=${width}:${height}[img_scaled]`,
           `color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`,
-          `[bg][img_scaled]overlay=0:0:enable='between(t,${mediaFile.startTime},${mediaFile.endTime})'[final]`
+          hasTimingConstraints
+            ? `[bg][img_scaled]overlay=${left}:${top}:enable='between(t,${mediaFile.startTime},${mediaFile.endTime})'[final]`
+            : `[bg][img_scaled]overlay=${left}:${top}[final]`
         ];
 
         ffmpeg()
@@ -895,10 +903,27 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
         }
 
         if (hasTimingConstraints) {
+          // Extract positioning from mediaFile
+          const left = parseInt(String(mediaFile.left).replace('px', '')) || 0;
+          const top = parseInt(String(mediaFile.top).replace('px', '')) || 0;
+
           complexFilters.push(`color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`);
-          complexFilters.push(`[bg][vid_styled]overlay=0:0:enable='between(t,${mediaFile.startTime},${mediaFile.endTime})'[final]`);
+          complexFilters.push(`[bg][vid_styled]overlay=${left}:${top}:enable='between(t,${mediaFile.startTime},${mediaFile.endTime})'[final]`);
+          console.log(`Applied video positioning: left=${left}, top=${top}`);
         } else {
-          complexFilters.push(`[vid_styled]copy[final]`);
+          // Even without timing constraints, we might need positioning
+          const left = parseInt(String(mediaFile.left).replace('px', '')) || 0;
+          const top = parseInt(String(mediaFile.top).replace('px', '')) || 0;
+
+          if (left !== 0 || top !== 0) {
+            // Need positioning, create background and overlay
+            complexFilters.push(`color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`);
+            complexFilters.push(`[bg][vid_styled]overlay=${left}:${top}[final]`);
+            console.log(`Applied video positioning (no timing): left=${left}, top=${top}`);
+          } else {
+            // No positioning needed
+            complexFilters.push(`[vid_styled]copy[final]`);
+          }
         }
 
         // Handle video audio volume if specified
