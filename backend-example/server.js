@@ -40,7 +40,17 @@ ensureDirectories();
 // Configure multer for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const folder = req.body.folder || 'misc';
+    // Determine folder based on file type (same logic as presigned URL)
+    const originalFileName = req.body.originalFileName || file.originalname;
+    const fileExtension = originalFileName.split('.').pop()?.toLowerCase();
+    let folder = 'misc';
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(fileExtension || '')) {
+      folder = 'images';
+    } else if (['mp4', 'mov', 'avi', 'mkv', 'webm'].includes(fileExtension || '')) {
+      folder = 'videos';
+    } else if (['mp3', 'wav', 'ogg', 'm4a', 'aac'].includes(fileExtension || '')) {
+      folder = 'audio';
+    }
     const folderPath = path.join(STORAGE_PATH, folder);
     cb(null, folderPath);
   },
