@@ -317,8 +317,10 @@ const createVideoFromProject = async (projectData, renderId) => {
 
       console.log(`Creating video: ${width}x${height}, ${fps}fps, ${totalDuration}s`);
 
-      // Process track items to get media files
+      // Process track items to get media files and text items
       let mediaItems = [];
+      let textItems = [];
+
       for (const itemId of trackItemIds) {
         const itemDetails = trackItemDetailsMap[itemId];
         const trackItem = trackItemsMap[itemId];
@@ -326,23 +328,70 @@ const createVideoFromProject = async (projectData, renderId) => {
         if (itemDetails && itemDetails.details && trackItem) {
           const details = itemDetails.details;
           const display = trackItem.display || {};
+          const itemType = details.type || itemDetails.type || 'unknown';
 
-          if (details.src) {
-            // Extract timing from trackItem.display
-            const startTime = (display.from || 0) / 1000; // Convert ms to seconds
-            const endTime = (display.to || display.from + 5000) / 1000; // Convert ms to seconds
-            const duration = endTime - startTime;
+          // Extract timing from trackItem.display
+          const startTime = (display.from || 0) / 1000; // Convert ms to seconds
+          const endTime = (display.to || display.from + 5000) / 1000; // Convert ms to seconds
+          const duration = endTime - startTime;
 
-            // Extract positioning (handle both string and number formats)
-            const top = parseInt(String(details.top || '0').replace('px', '')) || 0;
-            const left = parseInt(String(details.left || '0').replace('px', '')) || 0;
+          // Extract positioning (handle both string and number formats)
+          const top = parseInt(String(details.top || '0').replace('px', '')) || 0;
+          const left = parseInt(String(details.left || '0').replace('px', '')) || 0;
 
+          if (itemType === 'text') {
+            // Handle text items
+            textItems.push({
+              id: itemId,
+              type: 'text',
+              text: details.text || '',
+              startTime,
+              endTime,
+              duration,
+              width: details.width || 600,
+              height: details.height || 100,
+              top,
+              left,
+              opacity: (details.opacity || 100) / 100,
+              fontSize: details.fontSize || 48,
+              fontFamily: details.fontFamily || 'Arial',
+              color: details.color || '#ffffff',
+              backgroundColor: details.backgroundColor || 'transparent',
+              textAlign: details.textAlign || 'center',
+              fontWeight: details.fontWeight || 'normal',
+              fontStyle: details.fontStyle || 'normal',
+              textDecoration: details.textDecoration || 'none',
+              lineHeight: details.lineHeight || 'normal',
+              letterSpacing: details.letterSpacing || 'normal',
+              wordSpacing: details.wordSpacing || 'normal',
+              textTransform: details.textTransform || 'none',
+              textShadow: details.textShadow || 'none',
+              borderWidth: details.borderWidth || 0,
+              borderColor: details.borderColor || '#000000',
+              WebkitTextStrokeWidth: details.WebkitTextStrokeWidth || '0px',
+              WebkitTextStrokeColor: details.WebkitTextStrokeColor || '#ffffff'
+            });
+
+            console.log(`Parsed text item ${itemId}:`, {
+              type: 'text',
+              text: details.text?.substring(0, 30) + '...',
+              startTime,
+              endTime,
+              duration,
+              position: `${left}, ${top}`,
+              size: `${details.width}x${details.height}`,
+              fontSize: details.fontSize,
+              color: details.color
+            });
+
+          } else if (details.src) {
+            // Handle media items (images, videos, audio)
             // Handle audio trim information
             let trimStart = 0;
             let trimEnd = null;
             let trimDuration = null;
 
-            if (trackItem.trim && (details.type === 'audio' || itemDetails.type === 'audio')) {
+            if (trackItem.trim && (itemType === 'audio')) {
               trimStart = (trackItem.trim.from || 0) / 1000; // Convert ms to seconds
               trimEnd = (trackItem.trim.to || 0) / 1000; // Convert ms to seconds
               trimDuration = trimEnd - trimStart;
@@ -351,7 +400,7 @@ const createVideoFromProject = async (projectData, renderId) => {
 
             mediaItems.push({
               id: itemId,
-              type: details.type || itemDetails.type || 'image',
+              type: itemType,
               src: details.src,
               startTime,
               endTime,
@@ -368,7 +417,7 @@ const createVideoFromProject = async (projectData, renderId) => {
             });
 
             const logData = {
-              type: details.type || itemDetails.type,
+              type: itemType,
               startTime,
               endTime,
               duration,
@@ -387,11 +436,11 @@ const createVideoFromProject = async (projectData, renderId) => {
         }
       }
 
-      console.log(`Found ${mediaItems.length} media items to process`);
+      console.log(`Found ${mediaItems.length} media items and ${textItems.length} text items to process`);
 
-      if (mediaItems.length === 0) {
-        // Create a simple colored background if no media items
-        console.log('No media items found, creating simple background video');
+      if (mediaItems.length === 0 && textItems.length === 0) {
+        // Create a simple colored background if no media items or text items
+        console.log('No media items or text items found, creating simple background video');
         ffmpeg()
           .input(`color=black:size=${width}x${height}:duration=${totalDuration}:rate=${fps}`)
           .inputFormat('lavfi')
@@ -452,14 +501,14 @@ const createVideoFromProject = async (projectData, renderId) => {
         }
       }
 
-      if (downloadedFiles.length === 0) {
-        throw new Error('No media files could be downloaded');
+      if (downloadedFiles.length === 0 && textItems.length === 0) {
+        throw new Error('No media files could be downloaded and no text items found');
       }
 
       console.log(`Successfully downloaded ${downloadedFiles.length} media files`);
 
-      // Create video with downloaded media files
-      await createVideoWithMedia(downloadedFiles, outputPath, width, height, totalDuration, fps, renderId);
+      // Create video with downloaded media files and text items
+      await createVideoWithMedia(downloadedFiles, textItems, outputPath, width, height, totalDuration, fps, renderId);
 
       // Clean up temp files
       downloadedFiles.forEach(file => {
@@ -481,12 +530,12 @@ const createVideoFromProject = async (projectData, renderId) => {
   });
 };
 
-// Enhanced function to create video with multiple overlapping media files
-const createVideoWithMedia = async (mediaFiles, outputPath, width, height, duration, fps, renderId) => {
+// Enhanced function to create video with multiple overlapping media files and text items
+const createVideoWithMedia = async (mediaFiles, textItems, outputPath, width, height, duration, fps, renderId) => {
   return new Promise(async (resolve, reject) => {
-    console.log('Creating video with multiple media files...');
+    console.log('Creating video with multiple media files and text items...');
     console.log(`Video specs: ${width}x${height}, ${fps}fps, ${duration}s`);
-    console.log(`Media files: ${mediaFiles.length}`);
+    console.log(`Media files: ${mediaFiles.length}, Text items: ${textItems.length}`);
 
     // Log each media file details
     mediaFiles.forEach((file, index) => {
@@ -495,37 +544,62 @@ const createVideoWithMedia = async (mediaFiles, outputPath, width, height, durat
       console.log(`  Source: ${file.src}`);
     });
 
-    if (mediaFiles.length === 1) {
-      // Single media file - use simple approach
+    // Handle different combinations of media and text
+    if (mediaFiles.length === 0 && textItems.length > 0) {
+      // Only text items - create video with text overlays on background
+      console.log('Creating text-only video...');
+      return createTextOnlyVideo(textItems, outputPath, width, height, duration, fps, renderId)
+        .then(resolve)
+        .catch(reject);
+    }
+
+    if (mediaFiles.length === 1 && textItems.length === 0) {
+      // Single media file, no text - use simple approach
       const mediaFile = mediaFiles[0];
       return createSingleMediaVideo(mediaFile, outputPath, width, height, duration, fps, renderId)
         .then(resolve)
         .catch(reject);
     }
 
-    // Multiple media files detected - implement proper multi-layer composition
-    console.log('Creating multi-layer video with ALL images...');
+    // Multiple media files or combination of media and text - use complex composition
+    console.log('Creating multi-layer video with media and text...');
 
     // Sort by start time (earliest first becomes base layer)
     const sortedFiles = [...mediaFiles].sort((a, b) => a.startTime - b.startTime);
 
     console.log('Layer composition:');
     sortedFiles.forEach((file, index) => {
-      console.log(`  Layer ${index}: ${file.type} from ${file.startTime}s to ${file.startTime + file.duration}s`);
+      console.log(`  Media Layer ${index}: ${file.type} from ${file.startTime}s to ${file.startTime + file.duration}s`);
       console.log(`    Position: ${file.left}, ${file.top} | Size: ${file.width}x${file.height}`);
       console.log(`    Source: ${file.src.substring(0, 60)}...`);
     });
 
-    // Create multi-layer video using a working FFmpeg approach
-    createMultiLayerVideo(sortedFiles, outputPath, width, height, duration, fps, renderId)
+    textItems.forEach((item, index) => {
+      console.log(`  Text Layer ${index}: "${item.text.substring(0, 30)}..." from ${item.startTime}s to ${item.startTime + item.duration}s`);
+      console.log(`    Position: ${item.left}, ${item.top} | Size: ${item.width}x${item.height}`);
+      console.log(`    Style: ${item.fontSize}px ${item.fontFamily}, ${item.color}`);
+    });
+
+    // Create multi-layer video with both media and text
+    createMultiLayerVideoWithText(sortedFiles, textItems, outputPath, width, height, duration, fps, renderId)
       .then(resolve)
       .catch((error) => {
         console.error('Multi-layer composition failed:', error);
-        console.log('Falling back to single layer...');
-        // Fallback to single image if multi-layer fails
-        createSingleMediaVideo(sortedFiles[0], outputPath, width, height, duration, fps, renderId)
-          .then(resolve)
-          .catch(reject);
+        console.log('Falling back to simpler approach...');
+        // Fallback to single image file if available (skip audio files)
+        const imageFile = sortedFiles.find(file => file.type === 'image');
+        if (imageFile) {
+          console.log('Using single image fallback');
+          createSingleMediaVideo(imageFile, outputPath, width, height, duration, fps, renderId)
+            .then(resolve)
+            .catch(reject);
+        } else {
+          // Fallback to text-only
+          console.log('Using text-only fallback');
+          createTextOnlyVideo(textItems, outputPath, width, height, duration, fps, renderId)
+            .then(resolve)
+            .catch(reject);
+        }
       });
   });
 };
@@ -650,6 +724,331 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
     } else {
       reject(new Error(`Unsupported media type: ${mediaFile.type}`));
     }
+  });
+};
+
+// Function to create video with only text items (no media)
+const createTextOnlyVideo = async (textItems, outputPath, width, height, duration, fps, renderId) => {
+  return new Promise((resolve, reject) => {
+    console.log(`Creating text-only video with ${textItems.length} text items...`);
+
+    // Create a black background video
+    let command = ffmpeg()
+      .input(`color=black:size=${width}x${height}:duration=${duration}:rate=${fps}`)
+      .inputFormat('lavfi');
+
+    // Build text overlay filters
+    let filterComplex = [];
+    let currentInput = '[0:v]';
+
+    textItems.forEach((textItem, index) => {
+      const outputLabel = index === textItems.length - 1 ? '[final]' : `[text${index}]`;
+
+      // Escape text for FFmpeg
+      const escapedText = textItem.text.replace(/'/g, "\\'").replace(/:/g, "\\:");
+
+      // Build drawtext filter (no font file to avoid path issues)
+      const textFilter = `${currentInput}drawtext=text='${escapedText}':fontsize=${textItem.fontSize}:fontcolor=${textItem.color}:x=${textItem.left}:y=${textItem.top}:enable='between(t,${textItem.startTime},${textItem.endTime})'${outputLabel}`;
+
+      filterComplex.push(textFilter);
+      currentInput = `[text${index}]`;
+    });
+
+    if (filterComplex.length > 0) {
+      command = command.complexFilter(filterComplex);
+      command = command.map('[final]');
+    }
+
+    command
+      .output(outputPath)
+      .videoCodec('libx264')
+      .audioCodec('aac')
+      .format('mp4')
+      .on('start', (commandLine) => {
+        console.log('FFmpeg command for text-only video:', commandLine);
+      })
+      .on('progress', (progress) => {
+        console.log(`Text-only video progress: ${Math.round(progress.percent || 0)}%`);
+        if (renderJobs.has(renderId)) {
+          const job = renderJobs.get(renderId);
+          job.progress = Math.round(progress.percent || 0);
+          renderJobs.set(renderId, job);
+        }
+      })
+      .on('end', () => {
+        console.log('Text-only video rendering completed');
+        resolve(outputPath);
+      })
+      .on('error', (err) => {
+        console.error('FFmpeg error in text-only video:', err);
+        reject(err);
+      })
+      .run();
+  });
+};
+
+// Function to create video with both media files and text overlays
+const createMultiLayerVideoWithText = async (mediaFiles, textItems, outputPath, width, height, duration, fps, renderId) => {
+  return new Promise(async (resolve, reject) => {
+    console.log(`Creating multi-layer video with ${mediaFiles.length} media files and ${textItems.length} text items...`);
+
+    try {
+      // Create video with media files and integrate text overlays directly
+      if (mediaFiles.length > 0) {
+        // Use multi-layer video creation with integrated text support
+        await createMultiLayerVideoWithTextIntegrated(mediaFiles, textItems, outputPath, width, height, duration, fps, renderId);
+        resolve(outputPath);
+      } else {
+        // No media files, create text-only video
+        await createTextOnlyVideo(textItems, outputPath, width, height, duration, fps, renderId);
+        resolve(outputPath);
+      }
+    } catch (error) {
+      console.error('Error in createMultiLayerVideoWithText:', error);
+      reject(error);
+    }
+  });
+};
+
+// Function to add text overlays to an existing video file
+const addTextOverlaysToVideo = async (videoPath, textItems, width, height, duration, renderId) => {
+  return new Promise((resolve, reject) => {
+    console.log(`Adding ${textItems.length} text overlays to existing video...`);
+
+    // Create a temporary file for the result
+    const tempDir = path.join(STORAGE_PATH, 'temp');
+    const tempPath = path.join(tempDir, `${renderId}_with_text.mp4`);
+
+    let command = ffmpeg()
+      .input(videoPath);
+
+    // Build video filter string for text overlays using outputOptions
+    if (textItems.length > 0) {
+      let filterString = '';
+
+      textItems.forEach((textItem, index) => {
+        // Escape text for FFmpeg
+        const escapedText = textItem.text.replace(/'/g, "\\'");
+
+        // Build drawtext filter with proper syntax
+        if (index > 0) filterString += ',';
+        filterString += `drawtext=text='${escapedText}':fontsize=${textItem.fontSize}:fontcolor=${textItem.color}:x=${textItem.left}:y=${textItem.top}:enable='between(t,${textItem.startTime},${textItem.endTime})'`;
+      });
+
+      // Apply video filter using outputOptions for more control
+      command = command.outputOptions(['-vf', filterString]);
+    }
+
+    command
+      .output(tempPath)
+      .videoCodec('libx264')
+      .audioCodec('copy') // Copy existing audio
+      .format('mp4')
+      .on('start', (commandLine) => {
+        console.log('FFmpeg command for text overlays:', commandLine);
+      })
+      .on('progress', (progress) => {
+        console.log(`Text overlay progress: ${Math.round(progress.percent || 0)}%`);
+        if (renderJobs.has(renderId)) {
+          const job = renderJobs.get(renderId);
+          job.progress = Math.round(progress.percent || 0);
+          renderJobs.set(renderId, job);
+        }
+      })
+      .on('end', () => {
+        console.log('Text overlay rendering completed');
+        // Replace original with text-overlaid version
+        fs.renameSync(tempPath, videoPath);
+        resolve(videoPath);
+      })
+      .on('error', (err) => {
+        console.error('FFmpeg error in text overlay:', err);
+        reject(err);
+      })
+      .run();
+  });
+};
+
+// Enhanced multi-layer video creation with audio and text support
+const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, outputPath, width, height, duration, fps, renderId) => {
+  console.log(`Creating multi-layer video with ${mediaFiles.length} layers and ${textItems.length} text items...`);
+
+  // Separate media types
+  const imageFiles = mediaFiles.filter(file => file.type === 'image');
+  const audioFiles = mediaFiles.filter(file => file.type === 'audio');
+
+  console.log(`Found ${imageFiles.length} image files, ${audioFiles.length} audio files, and ${textItems.length} text items`);
+
+  if (imageFiles.length === 0) {
+    throw new Error('No image files found for composition');
+  }
+
+  if (imageFiles.length === 1 && audioFiles.length === 0 && textItems.length === 0) {
+    // Single image, no audio, no text - use simple approach
+    console.log('Single image, no audio, no text - using simple approach');
+    return createSingleMediaVideo(imageFiles[0], outputPath, width, height, duration, fps, renderId);
+  }
+
+  console.log(`Processing ${imageFiles.length} image layers, ${audioFiles.length} audio tracks, and ${textItems.length} text overlays...`);
+
+  // Multi-layer composition with images, audio, and text
+  console.log('Multi-layer composition with ALL images, ALL audio, and text:');
+  imageFiles.forEach((layer, index) => {
+    console.log(`  Image Layer ${index + 1}: ${layer.src} at ${layer.left},${layer.top} (${layer.startTime}s-${layer.endTime}s)`);
+  });
+  audioFiles.forEach((audio, index) => {
+    console.log(`  Audio ${index + 1}: ${audio.src} (${audio.startTime}s-${audio.endTime}s)`);
+    if (audio.trimStart !== 0 || audio.trimDuration !== null) {
+      console.log(`    Trim: ${audio.trimStart}s to ${audio.trimEnd}s (duration: ${audio.trimDuration}s)`);
+    }
+  });
+  textItems.forEach((text, index) => {
+    console.log(`  Text ${index + 1}: "${text.text}" at ${text.left},${text.top} (${text.startTime}s-${text.endTime}s)`);
+  });
+
+  return new Promise((resolve, reject) => {
+    console.log('Creating dynamic multi-layer composition with audio and text...');
+    console.log(`Background: black ${width}x${height}`);
+    imageFiles.forEach((layer, index) => {
+      console.log(`Layer ${index + 1}: ${layer.width}x${layer.height} at ${layer.left},${layer.top}`);
+    });
+    audioFiles.forEach((audio, index) => {
+      console.log(`Audio ${index + 1}: ${audio.localPath}`);
+    });
+    textItems.forEach((text, index) => {
+      console.log(`Text ${index + 1}: "${text.text}" ${text.fontSize}px at ${text.left},${text.top}`);
+    });
+
+    // Build FFmpeg command with all inputs
+    let command = ffmpeg();
+
+    // Add image inputs
+    imageFiles.forEach((layer) => {
+      command = command
+        .input(layer.localPath)
+        .inputOptions(['-loop 1', `-t ${duration}`]);
+    });
+
+    // Add audio inputs
+    audioFiles.forEach((audio) => {
+      command = command.input(audio.localPath);
+    });
+
+    // Build complex filter for video, audio, and text with proper timing constraints
+    const complexFilters = [];
+
+    // Scale all images
+    imageFiles.forEach((layer, index) => {
+      complexFilters.push(`[${index}:v]scale=${layer.width}:${layer.height}[img${index + 1}]`);
+    });
+
+    // Create background
+    complexFilters.push(`color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`);
+
+    // Build overlay chain - each image overlays on the previous result
+    let currentLayer = 'bg';
+    imageFiles.forEach((layer, index) => {
+      const left = parseInt(String(layer.left).replace('px', '')) || 0;
+      const top = parseInt(String(layer.top).replace('px', '')) || 0;
+      const nextLayer = index === imageFiles.length - 1 ? 'video_final' : `bg_with_img${index + 1}`;
+
+      complexFilters.push(
+        `[${currentLayer}][img${index + 1}]overlay=${left}:${top}:enable='between(t,${layer.startTime},${layer.endTime})'[${nextLayer}]`
+      );
+
+      currentLayer = nextLayer;
+    });
+
+    // Add text overlays to the video
+    if (textItems.length > 0) {
+      let textCurrentLayer = 'video_final';
+      textItems.forEach((textItem, index) => {
+        const outputLabel = index === textItems.length - 1 ? 'final' : `text${index}`;
+
+        // Escape text for FFmpeg
+        const escapedText = textItem.text.replace(/'/g, "\\'");
+
+        // Build drawtext filter with system font (use Helvetica which exists on macOS)
+        const textFilter = `[${textCurrentLayer}]drawtext=text='${escapedText}':fontfile=/System/Library/Fonts/Helvetica.ttc:fontsize=${textItem.fontSize}:fontcolor=${textItem.color}:x=${textItem.left}:y=${textItem.top}:enable='between(t,${textItem.startTime},${textItem.endTime})'[${outputLabel}]`;
+
+        complexFilters.push(textFilter);
+        textCurrentLayer = outputLabel;
+      });
+    } else {
+      // No text items, rename video_final to final
+      complexFilters.push(`[video_final]copy[final]`);
+    }
+
+    // Process audio tracks if any
+    if (audioFiles.length > 0) {
+      console.log(`Processing ${audioFiles.length} audio tracks...`);
+      audioFiles.forEach((audioFile, index) => {
+        const audioInputIndex = imageFiles.length + index; // Audio inputs come after image inputs
+        console.log(`Audio ${index + 1} timing: ${audioFile.startTime}s to ${audioFile.endTime}s (duration: ${audioFile.duration}s)`);
+
+        if (audioFile.trimStart !== undefined && audioFile.trimDuration !== undefined) {
+          console.log(`Audio ${index + 1} trim: extracting ${audioFile.trimStart}s to ${audioFile.trimStart + audioFile.trimDuration}s from original audio`);
+          // First trim the audio to extract the desired segment, then position it in timeline
+          const audioFilter = `[${audioInputIndex}:a]atrim=start=${audioFile.trimStart}:duration=${audioFile.trimDuration},asetpts=PTS-STARTPTS,adelay=${audioFile.startTime * 1000}|${audioFile.startTime * 1000}[audio${index + 1}_timed]`;
+          complexFilters.push(audioFilter);
+        } else {
+          // No trim info, use original logic
+          const audioFilter = `[${audioInputIndex}:a]atrim=start=${audioFile.startTime}:duration=${audioFile.duration},asetpts=PTS-STARTPTS,adelay=${audioFile.startTime * 1000}|${audioFile.startTime * 1000}[audio${index + 1}_timed]`;
+          complexFilters.push(audioFilter);
+        }
+      });
+
+      // Mix multiple audio tracks if needed
+      if (audioFiles.length > 1) {
+        const audioInputs = audioFiles.map((_, index) => `[audio${index + 1}_timed]`).join('');
+        const mixFilter = `${audioInputs}amix=inputs=${audioFiles.length}:duration=longest[audio_mixed]`;
+        complexFilters.push(mixFilter);
+        console.log(`Mixing ${audioFiles.length} audio tracks together`);
+      }
+    }
+
+    command = command.complexFilter(complexFilters);
+
+    // Map video and audio outputs
+    if (audioFiles.length > 0) {
+      if (audioFiles.length === 1) {
+        command = command.map('[final]').map('[audio1_timed]');
+        console.log('Mapping audio output: [audio1_timed]');
+      } else {
+        command = command.map('[final]').map('[audio_mixed]');
+        console.log('Mapping audio output: [audio_mixed]');
+      }
+    } else {
+      command = command.map('[final]');
+      console.log('No audio to map');
+    }
+
+    command
+      .output(outputPath)
+      .videoCodec('libx264')
+      .audioCodec('aac')
+      .format('mp4')
+      .outputOptions(['-pix_fmt yuv420p', '-preset fast', '-crf 23'])
+      .on('start', (commandLine) => {
+        console.log('Multi-layer with audio and text FFmpeg command:', commandLine);
+      })
+      .on('progress', (progress) => {
+        console.log(`Multi-layer with audio and text progress: ${Math.round(progress.percent || 0)}%`);
+        if (renderJobs.has(renderId)) {
+          const job = renderJobs.get(renderId);
+          job.progress = Math.round(progress.percent || 0);
+          renderJobs.set(renderId, job);
+        }
+      })
+      .on('end', () => {
+        console.log('Multi-layer with audio and text composition completed successfully!');
+        resolve(outputPath);
+      })
+      .on('error', (err) => {
+        console.error('FFmpeg error in multi-layer with text composition:', err);
+        reject(err);
+      })
+      .run();
   });
 };
 
