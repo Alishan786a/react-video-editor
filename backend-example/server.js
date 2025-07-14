@@ -386,16 +386,16 @@ const createVideoFromProject = async (projectData, renderId) => {
 
           } else if (details.src) {
             // Handle media items (images, videos, audio)
-            // Handle audio trim information
+            // Handle trim information for audio and video
             let trimStart = 0;
             let trimEnd = null;
             let trimDuration = null;
 
-            if (trackItem.trim && (itemType === 'audio')) {
+            if (trackItem.trim && (itemType === 'audio' || itemType === 'video')) {
               trimStart = (trackItem.trim.from || 0) / 1000; // Convert ms to seconds
               trimEnd = (trackItem.trim.to || 0) / 1000; // Convert ms to seconds
               trimDuration = trimEnd - trimStart;
-              console.log(`Audio trim detected for ${itemId}: ${trimStart}s to ${trimEnd}s (duration: ${trimDuration}s)`);
+              console.log(`${itemType} trim detected for ${itemId}: ${trimStart}s to ${trimEnd}s (duration: ${trimDuration}s)`);
             }
 
             mediaItems.push({
@@ -692,16 +692,52 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
     } else if (mediaFile.type === 'video') {
       console.log(`Processing single video: ${mediaFile.localPath}`);
 
-      ffmpeg()
-        .input(mediaFile.localPath)
-        .output(outputPath)
-        .videoCodec('libx264')
-        .audioCodec('aac')
-        .format('mp4')
-        .size(`${width}x${height}`)
-        .fps(fps)
-        .duration(duration)
-        .outputOptions(['-pix_fmt yuv420p', '-preset fast', '-crf 23'])
+      let command = ffmpeg().input(mediaFile.localPath);
+
+      // Handle video trim if specified
+      if (mediaFile.trimStart !== undefined && mediaFile.trimDuration !== undefined) {
+        console.log(`Video trim: extracting ${mediaFile.trimStart}s to ${mediaFile.trimStart + mediaFile.trimDuration}s from original video`);
+        command = command.inputOptions([`-ss ${mediaFile.trimStart}`, `-t ${mediaFile.trimDuration}`]);
+      }
+
+      // Check if video has timing constraints
+      if (mediaFile.startTime > 0 || mediaFile.endTime < duration) {
+        console.log('Applying timing constraints to single video');
+
+        // Use complex filter to apply timing constraints
+        const complexFilters = [
+          `[0:v]scale=${width}:${height}[vid_scaled]`,
+          `color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`,
+          `[bg][vid_scaled]overlay=0:0:enable='between(t,${mediaFile.startTime},${mediaFile.endTime})'[final]`
+        ];
+
+        command
+          .complexFilter(complexFilters)
+          .output(outputPath)
+          .videoCodec('libx264')
+          .audioCodec('aac')
+          .format('mp4')
+          .fps(fps)
+          .outputOptions([
+            '-map', '[final]',
+            '-pix_fmt yuv420p',
+            '-preset fast',
+            '-crf 23'
+          ]);
+      } else {
+        // No timing constraints, use simple approach
+        command
+          .output(outputPath)
+          .videoCodec('libx264')
+          .audioCodec('aac')
+          .format('mp4')
+          .size(`${width}x${height}`)
+          .fps(fps)
+          .duration(duration)
+          .outputOptions(['-pix_fmt yuv420p', '-preset fast', '-crf 23']);
+      }
+
+      command
         .on('start', (commandLine) => console.log('FFmpeg command:', commandLine))
         .on('progress', (progress) => {
           const percent = Math.round(progress.percent || 0);
@@ -930,26 +966,33 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
 
   // Separate media types
   const imageFiles = mediaFiles.filter(file => file.type === 'image');
+  const videoFiles = mediaFiles.filter(file => file.type === 'video');
   const audioFiles = mediaFiles.filter(file => file.type === 'audio');
 
-  console.log(`Found ${imageFiles.length} image files, ${audioFiles.length} audio files, and ${textItems.length} text items`);
+  console.log(`Found ${imageFiles.length} image files, ${videoFiles.length} video files, ${audioFiles.length} audio files, and ${textItems.length} text items`);
 
-  if (imageFiles.length === 0) {
-    throw new Error('No image files found for composition');
+  if (imageFiles.length === 0 && videoFiles.length === 0) {
+    throw new Error('No image or video files found for composition');
   }
 
-  if (imageFiles.length === 1 && audioFiles.length === 0 && textItems.length === 0) {
-    // Single image, no audio, no text - use simple approach
-    console.log('Single image, no audio, no text - using simple approach');
-    return createSingleMediaVideo(imageFiles[0], outputPath, width, height, duration, fps, renderId);
+  // Combine image and video files as visual layers
+  const visualFiles = [...imageFiles, ...videoFiles];
+
+  if (visualFiles.length === 1 && audioFiles.length === 0 && textItems.length === 0) {
+    // Single visual media, no audio, no text - use simple approach
+    console.log('Single visual media, no audio, no text - using simple approach');
+    return createSingleMediaVideo(visualFiles[0], outputPath, width, height, duration, fps, renderId);
   }
 
-  console.log(`Processing ${imageFiles.length} image layers, ${audioFiles.length} audio tracks, and ${textItems.length} text overlays...`);
+  console.log(`Processing ${imageFiles.length} image layers, ${videoFiles.length} video layers, ${audioFiles.length} audio tracks, and ${textItems.length} text overlays...`);
 
-  // Multi-layer composition with images, audio, and text
-  console.log('Multi-layer composition with ALL images, ALL audio, and text:');
+  // Multi-layer composition with images, videos, audio, and text
+  console.log('Multi-layer composition with ALL images, videos, audio, and text:');
   imageFiles.forEach((layer, index) => {
     console.log(`  Image Layer ${index + 1}: ${layer.src} at ${layer.left},${layer.top} (${layer.startTime}s-${layer.endTime}s)`);
+  });
+  videoFiles.forEach((layer, index) => {
+    console.log(`  Video Layer ${index + 1}: ${layer.src} at ${layer.left},${layer.top} (${layer.startTime}s-${layer.endTime}s)`);
   });
   audioFiles.forEach((audio, index) => {
     console.log(`  Audio ${index + 1}: ${audio.src} (${audio.startTime}s-${audio.endTime}s)`);
@@ -984,6 +1027,12 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
         .inputOptions(['-loop 1', `-t ${duration}`]);
     });
 
+    // Add video inputs
+    videoFiles.forEach((layer) => {
+      command = command
+        .input(layer.localPath);
+    });
+
     // Add audio inputs
     audioFiles.forEach((audio) => {
       command = command.input(audio.localPath);
@@ -997,21 +1046,50 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
       complexFilters.push(`[${index}:v]scale=${layer.width}:${layer.height}[img${index + 1}]`);
     });
 
+    // Scale all videos (with trim handling if needed)
+    videoFiles.forEach((layer, index) => {
+      const inputIndex = imageFiles.length + index;
+      if (layer.trimStart !== undefined && layer.trimDuration !== undefined) {
+        // Apply trim and scale for video
+        complexFilters.push(`[${inputIndex}:v]trim=start=${layer.trimStart}:duration=${layer.trimDuration},setpts=PTS-STARTPTS,scale=${layer.width}:${layer.height}[vid${index + 1}]`);
+      } else {
+        complexFilters.push(`[${inputIndex}:v]scale=${layer.width}:${layer.height}[vid${index + 1}]`);
+      }
+    });
+
     // Create background
     complexFilters.push(`color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`);
 
-    // Build overlay chain - each image overlays on the previous result
+    // Build overlay chain - each visual layer (image/video) overlays on the previous result
     let currentLayer = 'bg';
+    let layerIndex = 0;
+
+    // Add image layers
     imageFiles.forEach((layer, index) => {
       const left = parseInt(String(layer.left).replace('px', '')) || 0;
       const top = parseInt(String(layer.top).replace('px', '')) || 0;
-      const nextLayer = index === imageFiles.length - 1 ? 'video_final' : `bg_with_img${index + 1}`;
+      const nextLayer = layerIndex === visualFiles.length - 1 ? 'video_final' : `bg_with_layer${layerIndex + 1}`;
 
       complexFilters.push(
         `[${currentLayer}][img${index + 1}]overlay=${left}:${top}:enable='between(t,${layer.startTime},${layer.endTime})'[${nextLayer}]`
       );
 
       currentLayer = nextLayer;
+      layerIndex++;
+    });
+
+    // Add video layers
+    videoFiles.forEach((layer, index) => {
+      const left = parseInt(String(layer.left).replace('px', '')) || 0;
+      const top = parseInt(String(layer.top).replace('px', '')) || 0;
+      const nextLayer = layerIndex === visualFiles.length - 1 ? 'video_final' : `bg_with_layer${layerIndex + 1}`;
+
+      complexFilters.push(
+        `[${currentLayer}][vid${index + 1}]overlay=${left}:${top}:enable='between(t,${layer.startTime},${layer.endTime})'[${nextLayer}]`
+      );
+
+      currentLayer = nextLayer;
+      layerIndex++;
     });
 
     // Add text overlays to the video
@@ -1093,7 +1171,7 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
     if (audioFiles.length > 0) {
       console.log(`Processing ${audioFiles.length} audio tracks...`);
       audioFiles.forEach((audioFile, index) => {
-        const audioInputIndex = imageFiles.length + index; // Audio inputs come after image inputs
+        const audioInputIndex = imageFiles.length + videoFiles.length + index; // Audio inputs come after image and video inputs
         console.log(`Audio ${index + 1} timing: ${audioFile.startTime}s to ${audioFile.endTime}s (duration: ${audioFile.duration}s)`);
 
         if (audioFile.trimStart !== undefined && audioFile.trimDuration !== undefined) {
@@ -1168,35 +1246,42 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
 
   // Separate media types
   const imageFiles = mediaFiles.filter(file => file.type === 'image');
+  const videoFiles = mediaFiles.filter(file => file.type === 'video');
   const audioFiles = mediaFiles.filter(file => file.type === 'audio');
 
-  console.log(`Found ${imageFiles.length} image files and ${audioFiles.length} audio files`);
+  console.log(`Found ${imageFiles.length} image files, ${videoFiles.length} video files, and ${audioFiles.length} audio files`);
 
-  if (imageFiles.length === 0) {
-    throw new Error('No image files found for composition');
+  if (imageFiles.length === 0 && videoFiles.length === 0) {
+    throw new Error('No image or video files found for composition');
   }
 
-  if (imageFiles.length === 1 && audioFiles.length === 0) {
-    // Single image, no audio - use simple approach
-    console.log('Single image, no audio - using simple approach');
-    return createSingleMediaVideo(imageFiles[0], outputPath, width, height, duration, fps, renderId);
+  // Combine image and video files as visual layers
+  const visualFiles = [...imageFiles, ...videoFiles];
+
+  if (visualFiles.length === 1 && audioFiles.length === 0) {
+    // Single visual media, no audio - use simple approach
+    console.log('Single visual media, no audio - using simple approach');
+    return createSingleMediaVideo(visualFiles[0], outputPath, width, height, duration, fps, renderId);
   }
 
-  console.log(`Processing ${imageFiles.length} image layers and ${audioFiles.length} audio tracks...`);
+  console.log(`Processing ${imageFiles.length} image layers, ${videoFiles.length} video layers, and ${audioFiles.length} audio tracks...`);
 
   // Handle different scenarios
-  if (imageFiles.length === 1 && audioFiles.length === 1) {
-    // Single image + single audio
-    return createVideoWithAudio(imageFiles[0], audioFiles[0], outputPath, width, height, duration, fps, renderId);
-  } else if (imageFiles.length === 1 && audioFiles.length > 1) {
-    // Single image + multiple audio - use multi-layer approach
-    console.log(`Single image with ${audioFiles.length} audio tracks - using multi-layer composition`);
+  if (visualFiles.length === 1 && audioFiles.length === 1) {
+    // Single visual media + single audio
+    return createVideoWithAudio(visualFiles[0], audioFiles[0], outputPath, width, height, duration, fps, renderId);
+  } else if (visualFiles.length === 1 && audioFiles.length > 1) {
+    // Single visual media + multiple audio - use multi-layer approach
+    console.log(`Single visual media with ${audioFiles.length} audio tracks - using multi-layer composition`);
     // Fall through to multi-layer logic
-  } else if (imageFiles.length >= 2 || (imageFiles.length === 1 && audioFiles.length > 1)) {
-    // Multiple images (with or without audio) - FIXED: Handle ALL images and ALL audio tracks
-    console.log('Multi-layer composition with ALL images and ALL audio:');
+  } else if (visualFiles.length >= 2 || (visualFiles.length === 1 && audioFiles.length > 1)) {
+    // Multiple visual media (with or without audio) - Handle ALL images, videos, and audio tracks
+    console.log('Multi-layer composition with ALL images, videos, and audio:');
     imageFiles.forEach((layer, index) => {
-      console.log(`  Layer ${index + 1}: ${layer.src} at ${layer.left},${layer.top} (${layer.startTime}s-${layer.endTime}s)`);
+      console.log(`  Image Layer ${index + 1}: ${layer.src} at ${layer.left},${layer.top} (${layer.startTime}s-${layer.endTime}s)`);
+    });
+    videoFiles.forEach((layer, index) => {
+      console.log(`  Video Layer ${index + 1}: ${layer.src} at ${layer.left},${layer.top} (${layer.startTime}s-${layer.endTime}s)`);
     });
     audioFiles.forEach((audio, index) => {
       console.log(`  Audio ${index + 1}: ${audio.src} (${audio.startTime}s-${audio.endTime}s)`);
@@ -1209,7 +1294,7 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
       console.log('Creating dynamic multi-layer composition with audio...');
       console.log(`Background: black ${width}x${height}`);
 
-      // Build FFmpeg command with all image inputs
+      // Build FFmpeg command with all visual and audio inputs
       let command = ffmpeg();
 
       // Add all image inputs
@@ -1220,7 +1305,16 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
 
         const left = parseInt(String(layer.left).replace('px', '')) || 0;
         const top = parseInt(String(layer.top).replace('px', '')) || 0;
-        console.log(`Layer ${index + 1}: ${layer.width}x${layer.height} at ${left},${top}`);
+        console.log(`Image Layer ${index + 1}: ${layer.width}x${layer.height} at ${left},${top}`);
+      });
+
+      // Add all video inputs
+      videoFiles.forEach((layer, index) => {
+        command = command.input(layer.localPath);
+
+        const left = parseInt(String(layer.left).replace('px', '')) || 0;
+        const top = parseInt(String(layer.top).replace('px', '')) || 0;
+        console.log(`Video Layer ${index + 1}: ${layer.width}x${layer.height} at ${left},${top}`);
       });
 
       // Add all audio inputs
@@ -1237,21 +1331,50 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
         complexFilters.push(`[${index}:v]scale=${layer.width}:${layer.height}[img${index + 1}]`);
       });
 
+      // Scale all videos (with trim handling if needed)
+      videoFiles.forEach((layer, index) => {
+        const inputIndex = imageFiles.length + index;
+        if (layer.trimStart !== undefined && layer.trimDuration !== undefined) {
+          // Apply trim and scale for video
+          complexFilters.push(`[${inputIndex}:v]trim=start=${layer.trimStart}:duration=${layer.trimDuration},setpts=PTS-STARTPTS,scale=${layer.width}:${layer.height}[vid${index + 1}]`);
+        } else {
+          complexFilters.push(`[${inputIndex}:v]scale=${layer.width}:${layer.height}[vid${index + 1}]`);
+        }
+      });
+
       // Create background
       complexFilters.push(`color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`);
 
-      // Build overlay chain - each image overlays on the previous result
+      // Build overlay chain - each visual layer (image/video) overlays on the previous result
       let currentLayer = 'bg';
+      let layerIndex = 0;
+
+      // Add image layers
       imageFiles.forEach((layer, index) => {
         const left = parseInt(String(layer.left).replace('px', '')) || 0;
         const top = parseInt(String(layer.top).replace('px', '')) || 0;
-        const nextLayer = index === imageFiles.length - 1 ? 'final' : `bg_with_img${index + 1}`;
+        const nextLayer = layerIndex === visualFiles.length - 1 ? 'final' : `bg_with_layer${layerIndex + 1}`;
 
         complexFilters.push(
           `[${currentLayer}][img${index + 1}]overlay=${left}:${top}:enable='between(t,${layer.startTime},${layer.endTime})'[${nextLayer}]`
         );
 
         currentLayer = nextLayer;
+        layerIndex++;
+      });
+
+      // Add video layers
+      videoFiles.forEach((layer, index) => {
+        const left = parseInt(String(layer.left).replace('px', '')) || 0;
+        const top = parseInt(String(layer.top).replace('px', '')) || 0;
+        const nextLayer = layerIndex === visualFiles.length - 1 ? 'final' : `bg_with_layer${layerIndex + 1}`;
+
+        complexFilters.push(
+          `[${currentLayer}][vid${index + 1}]overlay=${left}:${top}:enable='between(t,${layer.startTime},${layer.endTime})'[${nextLayer}]`
+        );
+
+        currentLayer = nextLayer;
+        layerIndex++;
       });
 
       // Add audio timing filters for all audio tracks
@@ -1262,7 +1385,7 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
           console.log(`Audio ${index + 1} timing: ${audioFile.startTime}s to ${audioFile.endTime}s (duration: ${audioFile.duration}s)`);
 
           // Build audio filter based on whether trim information is available
-          const audioInputIndex = imageFiles.length + index; // Audio inputs come after all image inputs
+          const audioInputIndex = imageFiles.length + videoFiles.length + index; // Audio inputs come after all image and video inputs
 
           if (audioFile.trimStart !== undefined && audioFile.trimDuration !== undefined) {
             console.log(`Audio ${index + 1} trim: extracting ${audioFile.trimStart}s to ${audioFile.trimStart + audioFile.trimDuration}s from original audio`);
