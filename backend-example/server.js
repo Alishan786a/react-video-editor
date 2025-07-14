@@ -747,8 +747,63 @@ const createTextOnlyVideo = async (textItems, outputPath, width, height, duratio
       // Escape text for FFmpeg
       const escapedText = textItem.text.replace(/'/g, "\\'").replace(/:/g, "\\:");
 
-      // Build drawtext filter (no font file to avoid path issues)
-      const textFilter = `${currentInput}drawtext=text='${escapedText}':fontsize=${textItem.fontSize}:fontcolor=${textItem.color}:x=${textItem.left}:y=${textItem.top}:enable='between(t,${textItem.startTime},${textItem.endTime})'${outputLabel}`;
+      // Build enhanced drawtext filter with font file and styling
+      let fontFile = '/System/Library/Fonts/Helvetica.ttc'; // Default font
+
+      // Try to use custom font if provided (for now, fallback to system font)
+      if (textItem.fontFamily && textItem.fontFamily.includes('Roboto')) {
+        // For Roboto, we'll use Helvetica as fallback since it's similar
+        fontFile = '/System/Library/Fonts/Helvetica.ttc';
+      }
+
+      // Build comprehensive drawtext filter
+      let drawTextOptions = [
+        `text='${escapedText}'`,
+        `fontfile=${fontFile}`,
+        `fontsize=${textItem.fontSize}`,
+        `fontcolor=${textItem.color}`,
+        `x=${textItem.left}`,
+        `y=${textItem.top}`,
+        `enable='between(t,${textItem.startTime},${textItem.endTime})'`
+      ];
+
+      // Add text alignment if specified
+      if (textItem.textAlign === 'center') {
+        // For center alignment, adjust x position to center the text
+        const adjustedX = textItem.left - (textItem.width || 600) / 2;
+        drawTextOptions[4] = `x=${adjustedX}`;
+      }
+
+      // Add opacity/alpha if specified
+      if (textItem.opacity && textItem.opacity < 1) {
+        drawTextOptions.push(`alpha=${textItem.opacity}`);
+      }
+
+      // Add text stroke (outline) if specified
+      if (textItem.WebkitTextStrokeWidth && textItem.WebkitTextStrokeWidth !== '0px') {
+        const strokeWidth = parseInt(textItem.WebkitTextStrokeWidth.replace('px', '')) || 0;
+        if (strokeWidth > 0) {
+          drawTextOptions.push(`borderw=${strokeWidth}`);
+          drawTextOptions.push(`bordercolor=${textItem.WebkitTextStrokeColor || '#ffffff'}`);
+        }
+      }
+
+      // Add text shadow if specified (FFmpeg supports shadowx, shadowy, shadowcolor)
+      if (textItem.textShadow && textItem.textShadow !== 'none') {
+        // Parse text shadow: "2px 2px 4px rgba(0,0,0,0.5)" or simple values
+        drawTextOptions.push(`shadowx=2`);
+        drawTextOptions.push(`shadowy=2`);
+        drawTextOptions.push(`shadowcolor=black@0.5`);
+      }
+
+      // Add box background if backgroundColor is specified
+      if (textItem.backgroundColor && textItem.backgroundColor !== 'transparent') {
+        drawTextOptions.push(`box=1`);
+        drawTextOptions.push(`boxcolor=${textItem.backgroundColor}`);
+        drawTextOptions.push(`boxborderw=5`);
+      }
+
+      const textFilter = `${currentInput}drawtext=${drawTextOptions.join(':')}${outputLabel}`;
 
       filterComplex.push(textFilter);
       currentInput = `[text${index}]`;
@@ -968,8 +1023,63 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
         // Escape text for FFmpeg
         const escapedText = textItem.text.replace(/'/g, "\\'");
 
-        // Build drawtext filter with system font (use Helvetica which exists on macOS)
-        const textFilter = `[${textCurrentLayer}]drawtext=text='${escapedText}':fontfile=/System/Library/Fonts/Helvetica.ttc:fontsize=${textItem.fontSize}:fontcolor=${textItem.color}:x=${textItem.left}:y=${textItem.top}:enable='between(t,${textItem.startTime},${textItem.endTime})'[${outputLabel}]`;
+        // Build enhanced drawtext filter with more styling options
+        let fontFile = '/System/Library/Fonts/Helvetica.ttc'; // Default font
+
+        // Try to use custom font if provided (for now, fallback to system font)
+        if (textItem.fontFamily && textItem.fontFamily.includes('Roboto')) {
+          // For Roboto, we'll use Helvetica as fallback since it's similar
+          fontFile = '/System/Library/Fonts/Helvetica.ttc';
+        }
+
+        // Build comprehensive drawtext filter
+        let drawTextOptions = [
+          `text='${escapedText}'`,
+          `fontfile=${fontFile}`,
+          `fontsize=${textItem.fontSize}`,
+          `fontcolor=${textItem.color}`,
+          `x=${textItem.left}`,
+          `y=${textItem.top}`,
+          `enable='between(t,${textItem.startTime},${textItem.endTime})'`
+        ];
+
+        // Add text alignment if specified
+        if (textItem.textAlign === 'center') {
+          // For center alignment, adjust x position to center the text
+          const adjustedX = textItem.left - (textItem.width || 600) / 2;
+          drawTextOptions[4] = `x=${adjustedX}`;
+        }
+
+        // Add opacity/alpha if specified
+        if (textItem.opacity && textItem.opacity < 1) {
+          drawTextOptions.push(`alpha=${textItem.opacity}`);
+        }
+
+        // Add text stroke (outline) if specified
+        if (textItem.WebkitTextStrokeWidth && textItem.WebkitTextStrokeWidth !== '0px') {
+          const strokeWidth = parseInt(textItem.WebkitTextStrokeWidth.replace('px', '')) || 0;
+          if (strokeWidth > 0) {
+            drawTextOptions.push(`borderw=${strokeWidth}`);
+            drawTextOptions.push(`bordercolor=${textItem.WebkitTextStrokeColor || '#ffffff'}`);
+          }
+        }
+
+        // Add text shadow if specified (FFmpeg supports shadowx, shadowy, shadowcolor)
+        if (textItem.textShadow && textItem.textShadow !== 'none') {
+          // Parse text shadow: "2px 2px 4px rgba(0,0,0,0.5)" or simple values
+          drawTextOptions.push(`shadowx=2`);
+          drawTextOptions.push(`shadowy=2`);
+          drawTextOptions.push(`shadowcolor=black@0.5`);
+        }
+
+        // Add box background if backgroundColor is specified
+        if (textItem.backgroundColor && textItem.backgroundColor !== 'transparent') {
+          drawTextOptions.push(`box=1`);
+          drawTextOptions.push(`boxcolor=${textItem.backgroundColor}`);
+          drawTextOptions.push(`boxborderw=5`);
+        }
+
+        const textFilter = `[${textCurrentLayer}]drawtext=${drawTextOptions.join(':')}[${outputLabel}]`;
 
         complexFilters.push(textFilter);
         textCurrentLayer = outputLabel;
