@@ -235,6 +235,142 @@ app.get('/api/v1/editor/files/:folder/:filename', (req, res) => {
   }
 });
 
+// Helper function to create box shadow effect
+const createBoxShadowFilter = (layer, inputLabel, outputLabel) => {
+  if (!layer.boxShadow || (layer.boxShadow.x === 0 && layer.boxShadow.y === 0)) {
+    return null;
+  }
+
+  const shadow = layer.boxShadow;
+  const shadowColor = shadow.color || '#000000';
+  const offsetX = shadow.x || 0;
+  const offsetY = shadow.y || 0;
+  const blurRadius = shadow.blur || 0;
+
+  console.log(`Creating box shadow: offset(${offsetX}, ${offsetY}), blur=${blurRadius}, color=${shadowColor}`);
+
+  // Create shadow effect using multiple filters
+  let shadowFilters = [];
+
+  // 1. Create a colored background for shadow
+  shadowFilters.push(`[${inputLabel}]split[main][shadow_base]`);
+
+  // 2. Create shadow by making the video black and applying blur
+  let shadowFilter = `[shadow_base]format=rgba,geq=r=0:g=0:b=0:a=alpha(X,Y)`;
+
+  // 3. Apply blur if specified
+  if (blurRadius > 0) {
+    shadowFilter += `,gblur=sigma=${blurRadius}`;
+  }
+
+  // 4. Offset the shadow
+  shadowFilter += `,pad=iw+${Math.abs(offsetX)}:ih+${Math.abs(offsetY)}:${Math.max(0, -offsetX)}:${Math.max(0, -offsetY)}:color=transparent[shadow]`;
+  shadowFilters.push(shadowFilter);
+
+  // 5. Pad the main video to match shadow dimensions
+  const mainFilter = `[main]pad=iw+${Math.abs(offsetX)}:ih+${Math.abs(offsetY)}:${Math.max(0, offsetX)}:${Math.max(0, offsetY)}:color=transparent[main_padded]`;
+  shadowFilters.push(mainFilter);
+
+  // 6. Composite shadow and main video
+  shadowFilters.push(`[shadow][main_padded]overlay[${outputLabel}]`);
+
+  return shadowFilters;
+};
+
+// Helper function to build video styling filters
+const buildVideoStyleFilters = (layer) => {
+  let filters = [];
+
+  console.log(`Applying video styling for layer:`, {
+    opacity: layer.opacity,
+    blur: layer.blur,
+    brightness: layer.brightness,
+    flipX: layer.flipX,
+    flipY: layer.flipY,
+    transform: layer.transform,
+    boxShadow: layer.boxShadow,
+    borderRadius: layer.borderRadius,
+    borderWidth: layer.borderWidth,
+    borderColor: layer.borderColor
+  });
+
+  // Apply flip transformations first
+  if (layer.flipY) {
+    filters.push('vflip');
+    console.log('Applied vertical flip');
+  }
+  if (layer.flipX) {
+    filters.push('hflip');
+    console.log('Applied horizontal flip');
+  }
+
+  // Apply blur effect
+  if (layer.blur && layer.blur > 0) {
+    filters.push(`gblur=sigma=${layer.blur}`);
+    console.log(`Applied blur: sigma=${layer.blur}`);
+  }
+
+  // Apply brightness and contrast adjustments using eq filter
+  if (layer.brightness && layer.brightness !== 100) {
+    // Convert percentage to FFmpeg brightness range
+    // FFmpeg brightness: -1.0 (black) to 1.0 (white), 0 = normal
+    // 100% = 0, 200% = 1.0, 0% = -1.0
+    const brightnessValue = (layer.brightness - 100) / 100;
+
+    // Also apply slight contrast adjustment for better visual effect
+    const contrastValue = Math.max(0.5, Math.min(2.0, layer.brightness / 100));
+
+    // Use single eq filter for both brightness and contrast
+    filters.push(`eq=brightness=${brightnessValue.toFixed(2)}:contrast=${contrastValue.toFixed(2)}`);
+    console.log(`Applied brightness: ${brightnessValue.toFixed(2)}, contrast: ${contrastValue.toFixed(2)} (from ${layer.brightness}%)`);
+  }
+
+  // Apply border radius (rounded corners) using crop and pad
+  if (layer.borderRadius && layer.borderRadius > 0) {
+    // FFmpeg doesn't have direct border-radius, but we can simulate with masks
+    // For now, we'll log it as it requires complex mask generation
+    console.log(`Border radius detected: ${layer.borderRadius}px (complex implementation needed)`);
+  }
+
+  // Apply border (outline) effect
+  if (layer.borderWidth && layer.borderWidth > 0) {
+    // Use drawbox filter to create border effect
+    const borderColor = layer.borderColor || '#000000';
+
+    // Create border using drawbox (this creates an outline effect)
+    filters.push(`drawbox=x=0:y=0:w=iw:h=ih:color=${borderColor}:t=${layer.borderWidth}`);
+    console.log(`Applied border: ${layer.borderWidth}px ${borderColor}`);
+  }
+
+  // Apply opacity/alpha - this needs to be done carefully for video overlay
+  if (layer.opacity && layer.opacity !== 100) {
+    const alphaValue = layer.opacity / 100; // Convert percentage to decimal
+    // Use format=rgba to ensure alpha channel, then adjust alpha using colorchannelmixer
+    // The aa parameter controls the alpha channel multiplier
+    filters.push(`format=rgba,colorchannelmixer=aa=${alphaValue.toFixed(2)}`);
+    console.log(`Applied opacity: ${alphaValue.toFixed(2)} (from ${layer.opacity}%)`);
+  }
+
+  // Handle transform scaling (extract scale values from transform string)
+  if (layer.transform && layer.transform.includes('scale')) {
+    const scaleMatch = layer.transform.match(/scale\(([^)]+)\)/);
+    if (scaleMatch) {
+      const scaleValues = scaleMatch[1].split(',').map(v => parseFloat(v.trim()));
+      if (scaleValues.length >= 2) {
+        const scaleX = scaleValues[0];
+        const scaleY = scaleValues[1];
+        // We'll handle scaling in the main scale filter, but log it here
+        console.log(`Transform scale detected: ${scaleX}, ${scaleY}`);
+      }
+    }
+  }
+
+  // Join filters with commas if any exist
+  const filterString = filters.length > 0 ? filters.join(',') + ',' : '';
+  console.log(`Generated video filter chain: ${filterString}`);
+  return filterString;
+};
+
 // Helper function to download media files from URLs
 const downloadMediaFile = async (url, filename) => {
   const tempDir = path.join(STORAGE_PATH, 'temp');
@@ -412,8 +548,17 @@ const createVideoFromProject = async (projectData, renderId) => {
               height: details.height || height,
               top,
               left,
-              opacity: (details.opacity || 100) / 100,
-              transform: details.transform || 'none'
+              opacity: details.opacity || 100, // Keep as percentage for easier processing
+              transform: details.transform || 'none',
+              blur: details.blur || 0,
+              brightness: details.brightness || 100,
+              flipX: details.flipX || false,
+              flipY: details.flipY || false,
+              boxShadow: details.boxShadow || null,
+              borderRadius: details.borderRadius || 0,
+              borderWidth: details.borderWidth || 0,
+              borderColor: details.borderColor || '#000000',
+              volume: details.volume !== undefined ? details.volume : 100 // Video volume control
             });
 
             const logData = {
@@ -700,16 +845,85 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
         command = command.inputOptions([`-ss ${mediaFile.trimStart}`, `-t ${mediaFile.trimDuration}`]);
       }
 
-      // Check if video has timing constraints
-      if (mediaFile.startTime > 0 || mediaFile.endTime < duration) {
-        console.log('Applying timing constraints to single video');
+      // Check if video has timing constraints or styling effects
+      const hasTimingConstraints = mediaFile.startTime > 0 || mediaFile.endTime < duration;
+      const hasStyleEffects = mediaFile.flipX || mediaFile.flipY || (mediaFile.blur && mediaFile.blur > 0) ||
+                             (mediaFile.brightness && mediaFile.brightness !== 100) ||
+                             (mediaFile.opacity && mediaFile.opacity !== 100);
 
-        // Use complex filter to apply timing constraints
-        const complexFilters = [
-          `[0:v]scale=${width}:${height}[vid_scaled]`,
-          `color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`,
-          `[bg][vid_scaled]overlay=0:0:enable='between(t,${mediaFile.startTime},${mediaFile.endTime})'[final]`
-        ];
+      if (hasTimingConstraints || hasStyleEffects) {
+        console.log('Applying timing constraints and/or styling effects to single video');
+
+        // Build filter chain with styling effects
+        let videoFilter = '[0:v]';
+        videoFilter += buildVideoStyleFilters(mediaFile);
+
+        // Calculate final dimensions with transform scaling (same as multi-layer)
+        let finalWidth = width;
+        let finalHeight = height;
+
+        // Extract scale from transform if present
+        if (mediaFile.transform && mediaFile.transform.includes('scale')) {
+          const scaleMatch = mediaFile.transform.match(/scale\(([^)]+)\)/);
+          if (scaleMatch) {
+            const scaleValues = scaleMatch[1].split(',').map(v => parseFloat(v.trim()));
+            if (scaleValues.length >= 2) {
+              finalWidth = Math.round(width * scaleValues[0]);
+              finalHeight = Math.round(height * scaleValues[1]);
+              console.log(`Applied transform scaling: ${width}x${height} -> ${finalWidth}x${finalHeight}`);
+            } else if (scaleValues.length === 1) {
+              // Single scale value applies to both dimensions
+              finalWidth = Math.round(width * scaleValues[0]);
+              finalHeight = Math.round(height * scaleValues[0]);
+              console.log(`Applied uniform transform scaling: ${width}x${height} -> ${finalWidth}x${finalHeight}`);
+            }
+          }
+        }
+
+        // Ensure dimensions are even numbers and have minimum size for FFmpeg compatibility
+        finalWidth = Math.max(2, Math.round(finalWidth / 2) * 2);
+        finalHeight = Math.max(2, Math.round(finalHeight / 2) * 2);
+        console.log(`Final dimensions (FFmpeg compatible): ${finalWidth}x${finalHeight}`);
+
+        // For now, skip box shadow in single video processing to avoid FFmpeg complexity
+        // TODO: Implement simplified box shadow for single video processing
+        videoFilter += `scale=${finalWidth}:${finalHeight}[vid_styled]`;
+        const complexFilters = [videoFilter];
+
+        if (mediaFile.boxShadow && (mediaFile.boxShadow.x !== 0 || mediaFile.boxShadow.y !== 0)) {
+          console.log(`Box shadow detected but skipped in single video processing: offset(${mediaFile.boxShadow.x}, ${mediaFile.boxShadow.y}), blur=${mediaFile.boxShadow.blur}`);
+        }
+
+        if (hasTimingConstraints) {
+          complexFilters.push(`color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`);
+          complexFilters.push(`[bg][vid_styled]overlay=0:0:enable='between(t,${mediaFile.startTime},${mediaFile.endTime})'[final]`);
+        } else {
+          complexFilters.push(`[vid_styled]copy[final]`);
+        }
+
+        // Handle video audio volume if specified
+        let audioMap = [];
+        let useProcessedAudio = false;
+
+        if (mediaFile.volume !== undefined && mediaFile.volume !== 100) {
+          if (mediaFile.volume === 0) {
+            // Mute audio completely - no audio mapping
+            audioMap = [];
+            useProcessedAudio = false;
+            console.log(`Applied video volume: muted (from ${mediaFile.volume}%)`);
+          } else {
+            const volumeLevel = mediaFile.volume / 100; // Convert percentage to decimal
+            complexFilters.push(`[0:a]volume=${volumeLevel.toFixed(2)}[audio_out]`);
+            audioMap = ['-map', '[audio_out]'];
+            useProcessedAudio = true;
+            console.log(`Applied video volume: ${volumeLevel.toFixed(2)} (from ${mediaFile.volume}%)`);
+          }
+        } else {
+          // No volume setting specified or volume is 100%, preserve original video audio
+          audioMap = ['-map', '0:a?']; // Map original audio if present, ignore if not
+          useProcessedAudio = false;
+          console.log(`Preserving original video audio (no volume control or volume=100%)`);
+        }
 
         command
           .complexFilter(complexFilters)
@@ -717,15 +931,32 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
           .videoCodec('libx264')
           .audioCodec('aac')
           .format('mp4')
-          .fps(fps)
-          .outputOptions([
-            '-map', '[final]',
-            '-pix_fmt yuv420p',
-            '-preset fast',
-            '-crf 23'
-          ]);
+          .fps(fps);
+
+        // Add video mapping
+        command = command.outputOptions(['-map', '[final]']);
+
+        // Add audio mapping based on volume control
+        if (useProcessedAudio) {
+          // Volume control was applied, use the processed audio
+          command = command.outputOptions(audioMap);
+          console.log('Using processed audio with volume control');
+        } else if (audioMap.length > 0) {
+          // Preserve original audio
+          command = command.outputOptions(audioMap);
+          console.log('Preserving original video audio (no volume control applied)');
+        } else {
+          // Audio is muted (volume = 0)
+          console.log('Audio muted - no audio mapping');
+        }
+
+        command = command.outputOptions([
+          '-pix_fmt yuv420p',
+          '-preset fast',
+          '-crf 23'
+        ]);
       } else {
-        // No timing constraints, use simple approach
+        // No timing constraints or styling, use simple approach
         command
           .output(outputPath)
           .videoCodec('libx264')
@@ -1046,14 +1277,59 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
       complexFilters.push(`[${index}:v]scale=${layer.width}:${layer.height}[img${index + 1}]`);
     });
 
-    // Scale all videos (with trim handling if needed)
+    // Scale all videos (with trim handling and styling effects)
     videoFiles.forEach((layer, index) => {
       const inputIndex = imageFiles.length + index;
+      let filterChain = `[${inputIndex}:v]`;
+
+      // Apply trim if needed
       if (layer.trimStart !== undefined && layer.trimDuration !== undefined) {
-        // Apply trim and scale for video
-        complexFilters.push(`[${inputIndex}:v]trim=start=${layer.trimStart}:duration=${layer.trimDuration},setpts=PTS-STARTPTS,scale=${layer.width}:${layer.height}[vid${index + 1}]`);
+        filterChain += `trim=start=${layer.trimStart}:duration=${layer.trimDuration},setpts=PTS-STARTPTS,`;
+      }
+
+      // Apply video styling effects (except box shadow)
+      filterChain += buildVideoStyleFilters(layer);
+
+      // Calculate final dimensions with transform scaling
+      let finalWidth = layer.width;
+      let finalHeight = layer.height;
+
+      // Extract scale from transform if present
+      if (layer.transform && layer.transform.includes('scale')) {
+        const scaleMatch = layer.transform.match(/scale\(([^)]+)\)/);
+        if (scaleMatch) {
+          const scaleValues = scaleMatch[1].split(',').map(v => parseFloat(v.trim()));
+          if (scaleValues.length >= 2) {
+            finalWidth = Math.round(layer.width * scaleValues[0]);
+            finalHeight = Math.round(layer.height * scaleValues[1]);
+            console.log(`Applied transform scaling: ${layer.width}x${layer.height} -> ${finalWidth}x${finalHeight}`);
+          } else if (scaleValues.length === 1) {
+            // Single scale value applies to both dimensions
+            finalWidth = Math.round(layer.width * scaleValues[0]);
+            finalHeight = Math.round(layer.height * scaleValues[0]);
+            console.log(`Applied uniform transform scaling: ${layer.width}x${layer.height} -> ${finalWidth}x${finalHeight}`);
+          }
+        }
+      }
+
+      // Scale first, then handle box shadow if present
+      if (layer.boxShadow && (layer.boxShadow.x !== 0 || layer.boxShadow.y !== 0)) {
+        // Scale first, then apply box shadow
+        filterChain += `scale=${finalWidth}:${finalHeight}[vid${index + 1}_scaled]`;
+        complexFilters.push(filterChain);
+
+        // Create box shadow effect
+        const shadowFilters = createBoxShadowFilter(layer, `vid${index + 1}_scaled`, `vid${index + 1}`);
+        if (shadowFilters) {
+          shadowFilters.forEach(filter => complexFilters.push(filter));
+        } else {
+          // No shadow, just copy the scaled video
+          complexFilters.push(`[vid${index + 1}_scaled]copy[vid${index + 1}]`);
+        }
       } else {
-        complexFilters.push(`[${inputIndex}:v]scale=${layer.width}:${layer.height}[vid${index + 1}]`);
+        // No box shadow, just scale
+        filterChain += `scale=${finalWidth}:${finalHeight}[vid${index + 1}]`;
+        complexFilters.push(filterChain);
       }
     });
 
@@ -1167,39 +1443,99 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
       complexFilters.push(`[video_final]copy[final]`);
     }
 
-    // Process audio tracks if any
-    if (audioFiles.length > 0) {
-      console.log(`Processing ${audioFiles.length} audio tracks...`);
-      audioFiles.forEach((audioFile, index) => {
-        const audioInputIndex = imageFiles.length + videoFiles.length + index; // Audio inputs come after image and video inputs
-        console.log(`Audio ${index + 1} timing: ${audioFile.startTime}s to ${audioFile.endTime}s (duration: ${audioFile.duration}s)`);
+    // Process audio tracks (including video audio and external audio files)
+    let allAudioSources = [];
+    let audioTrackIndex = 1;
 
-        if (audioFile.trimStart !== undefined && audioFile.trimDuration !== undefined) {
-          console.log(`Audio ${index + 1} trim: extracting ${audioFile.trimStart}s to ${audioFile.trimStart + audioFile.trimDuration}s from original audio`);
-          // First trim the audio to extract the desired segment, then position it in timeline
-          const audioFilter = `[${audioInputIndex}:a]atrim=start=${audioFile.trimStart}:duration=${audioFile.trimDuration},asetpts=PTS-STARTPTS,adelay=${audioFile.startTime * 1000}|${audioFile.startTime * 1000}[audio${index + 1}_timed]`;
+    // Add video audio sources (include video audio unless explicitly muted)
+    videoFiles.forEach((videoFile, index) => {
+      const videoInputIndex = imageFiles.length + index;
+
+      // Include video audio unless explicitly muted (volume = 0)
+      if (videoFile.volume === undefined || videoFile.volume > 0) {
+        const volumeLevel = videoFile.volume !== undefined ? videoFile.volume / 100 : 1.0; // Default to full volume if not specified
+
+        allAudioSources.push({
+          ...videoFile,
+          type: 'video_audio',
+          inputIndex: videoInputIndex,
+          audioIndex: audioTrackIndex,
+          volumeLevel: volumeLevel
+        });
+
+        console.log(`Including video audio ${audioTrackIndex}: volume=${volumeLevel.toFixed(2)} (${videoFile.volume || 100}%)`);
+        audioTrackIndex++;
+      } else {
+        console.log(`Excluding video audio ${index + 1}: muted (volume=0)`);
+      }
+    });
+
+    // Add external audio files
+    audioFiles.forEach((audioFile, index) => {
+      allAudioSources.push({
+        ...audioFile,
+        type: 'external_audio',
+        inputIndex: imageFiles.length + videoFiles.length + index,
+        audioIndex: audioTrackIndex
+      });
+
+      console.log(`Including external audio ${audioTrackIndex}: ${audioFile.src}`);
+      audioTrackIndex++;
+    });
+
+    if (allAudioSources.length > 0) {
+      console.log(`Processing ${allAudioSources.length} total audio sources (${allAudioSources.filter(a => a.type === 'video_audio').length} video audio + ${audioFiles.length} external audio)...`);
+
+      allAudioSources.forEach((audioSource) => {
+        if (audioSource.type === 'video_audio') {
+          // Handle video audio with volume control
+          const inputIndex = audioSource.inputIndex;
+          const audioIndex = audioSource.audioIndex;
+
+          let audioFilter = `[${inputIndex}:a]`;
+
+          // Apply volume if not default
+          if (audioSource.volumeLevel !== 1.0) {
+            audioFilter += `volume=${audioSource.volumeLevel.toFixed(2)},`;
+          }
+
+          // Apply timing constraints
+          audioFilter += `atrim=start=${audioSource.startTime}:duration=${audioSource.duration},asetpts=PTS-STARTPTS,adelay=${audioSource.startTime * 1000}|${audioSource.startTime * 1000}[audio${audioIndex}_timed]`;
+
           complexFilters.push(audioFilter);
+          console.log(`Video audio ${audioIndex} filter: ${audioFilter}`);
         } else {
-          // No trim info, use original logic
-          const audioFilter = `[${audioInputIndex}:a]atrim=start=${audioFile.startTime}:duration=${audioFile.duration},asetpts=PTS-STARTPTS,adelay=${audioFile.startTime * 1000}|${audioFile.startTime * 1000}[audio${index + 1}_timed]`;
-          complexFilters.push(audioFilter);
+          // Handle external audio files
+          const inputIndex = audioSource.inputIndex;
+          const audioIndex = audioSource.audioIndex;
+
+          console.log(`External audio ${audioIndex} timing: ${audioSource.startTime}s to ${audioSource.endTime}s (duration: ${audioSource.duration}s)`);
+
+          if (audioSource.trimStart !== undefined && audioSource.trimDuration !== undefined) {
+            console.log(`External audio ${audioIndex} trim: extracting ${audioSource.trimStart}s to ${audioSource.trimStart + audioSource.trimDuration}s from original audio`);
+            const audioFilter = `[${inputIndex}:a]atrim=start=${audioSource.trimStart}:duration=${audioSource.trimDuration},asetpts=PTS-STARTPTS,adelay=${audioSource.startTime * 1000}|${audioSource.startTime * 1000}[audio${audioIndex}_timed]`;
+            complexFilters.push(audioFilter);
+          } else {
+            const audioFilter = `[${inputIndex}:a]atrim=start=${audioSource.startTime}:duration=${audioSource.duration},asetpts=PTS-STARTPTS,adelay=${audioSource.startTime * 1000}|${audioSource.startTime * 1000}[audio${audioIndex}_timed]`;
+            complexFilters.push(audioFilter);
+          }
         }
       });
 
       // Mix multiple audio tracks if needed
-      if (audioFiles.length > 1) {
-        const audioInputs = audioFiles.map((_, index) => `[audio${index + 1}_timed]`).join('');
-        const mixFilter = `${audioInputs}amix=inputs=${audioFiles.length}:duration=longest[audio_mixed]`;
+      if (allAudioSources.length > 1) {
+        const audioInputs = allAudioSources.map((_, index) => `[audio${index + 1}_timed]`).join('');
+        const mixFilter = `${audioInputs}amix=inputs=${allAudioSources.length}:duration=longest[audio_mixed]`;
         complexFilters.push(mixFilter);
-        console.log(`Mixing ${audioFiles.length} audio tracks together`);
+        console.log(`Mixing ${allAudioSources.length} audio tracks together`);
       }
     }
 
     command = command.complexFilter(complexFilters);
 
     // Map video and audio outputs
-    if (audioFiles.length > 0) {
-      if (audioFiles.length === 1) {
+    if (allAudioSources.length > 0) {
+      if (allAudioSources.length === 1) {
         command = command.map('[final]').map('[audio1_timed]');
         console.log('Mapping audio output: [audio1_timed]');
       } else {
@@ -1331,15 +1667,45 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
         complexFilters.push(`[${index}:v]scale=${layer.width}:${layer.height}[img${index + 1}]`);
       });
 
-      // Scale all videos (with trim handling if needed)
+      // Scale all videos (with trim handling and styling effects)
       videoFiles.forEach((layer, index) => {
         const inputIndex = imageFiles.length + index;
+        let filterChain = `[${inputIndex}:v]`;
+
+        // Apply trim if needed
         if (layer.trimStart !== undefined && layer.trimDuration !== undefined) {
-          // Apply trim and scale for video
-          complexFilters.push(`[${inputIndex}:v]trim=start=${layer.trimStart}:duration=${layer.trimDuration},setpts=PTS-STARTPTS,scale=${layer.width}:${layer.height}[vid${index + 1}]`);
-        } else {
-          complexFilters.push(`[${inputIndex}:v]scale=${layer.width}:${layer.height}[vid${index + 1}]`);
+          filterChain += `trim=start=${layer.trimStart}:duration=${layer.trimDuration},setpts=PTS-STARTPTS,`;
         }
+
+        // Apply video styling effects
+        filterChain += buildVideoStyleFilters(layer);
+
+        // Calculate final dimensions with transform scaling
+        let finalWidth = layer.width;
+        let finalHeight = layer.height;
+
+        // Extract scale from transform if present
+        if (layer.transform && layer.transform.includes('scale')) {
+          const scaleMatch = layer.transform.match(/scale\(([^)]+)\)/);
+          if (scaleMatch) {
+            const scaleValues = scaleMatch[1].split(',').map(v => parseFloat(v.trim()));
+            if (scaleValues.length >= 2) {
+              finalWidth = Math.round(layer.width * scaleValues[0]);
+              finalHeight = Math.round(layer.height * scaleValues[1]);
+              console.log(`Applied transform scaling: ${layer.width}x${layer.height} -> ${finalWidth}x${finalHeight}`);
+            } else if (scaleValues.length === 1) {
+              // Single scale value applies to both dimensions
+              finalWidth = Math.round(layer.width * scaleValues[0]);
+              finalHeight = Math.round(layer.height * scaleValues[0]);
+              console.log(`Applied uniform transform scaling: ${layer.width}x${layer.height} -> ${finalWidth}x${finalHeight}`);
+            }
+          }
+        }
+
+        // Final scale
+        filterChain += `scale=${finalWidth}:${finalHeight}[vid${index + 1}]`;
+
+        complexFilters.push(filterChain);
       });
 
       // Create background
