@@ -976,12 +976,12 @@
   resolved "https://registry.npmjs.org/@remix-run/router/-/router-1.23.0.tgz"
   integrity sha512-O3rHJzAQKamUz1fvE0Qaw0xSFqsA/yafi2iqeE0pvdFtCO1viYx8QL6f3Ln/aCCTLxs68SLf0KPM9eSeM8yBnA==
 
-"@remotion/player@^4.0.324":
-  version "4.0.324"
-  resolved "https://registry.npmjs.org/@remotion/player/-/player-4.0.324.tgz"
-  integrity sha512-Lhr97/0WbeoUzSDgsccwAwF9yuP6elldXMmDFAozK5imgZBjf82XRSJgYr9LFRN8p9W3BMsulxi/FfIbqjgIUQ==
+"@remotion/player@^4.0.212":
+  version "4.0.323"
+  resolved "https://registry.npmjs.org/@remotion/player/-/player-4.0.323.tgz"
+  integrity sha512-eH3rS1wtCTCZQM/7isnmeUFpQs4pIaIaSaR5hCg1gw72GPLEEMoMl4QmFyC2StrJcMjJkXDv9jBdKNDqv5b6LQ==
   dependencies:
-    remotion "4.0.324"
+    remotion "4.0.323"
 
 "@rolldown/pluginutils@1.0.0-beta.19":
   version "1.0.0-beta.19"
@@ -2837,10 +2837,10 @@ readdirp@~3.6.0:
   dependencies:
     picomatch "^2.2.1"
 
-remotion@^4.0.324, remotion@4.0.324:
-  version "4.0.324"
-  resolved "https://registry.npmjs.org/remotion/-/remotion-4.0.324.tgz"
-  integrity sha512-+U4iib4/F2nPbVOLelM3HgOQHSwovYqy5JeMgZVWDZKNOTKGveooge8eYe137eLM91J6Xb/cF3mFegKaJcTZHg==
+remotion@^4.0.212, remotion@4.0.323:
+  version "4.0.323"
+  resolved "https://registry.npmjs.org/remotion/-/remotion-4.0.323.tgz"
+  integrity sha512-8yhMSvhqCvw7JHt4bwLxxjpceSamTCsR8ybdEyZWbiWdU0pSOdNetFX9GkFJjDp9+jLZ3TXU1COMCNVSvlo81w==
 
 requires-port@^1.0.0:
   version "1.0.0"
