@@ -457,9 +457,12 @@ const createVideoFromProject = async (projectData, renderId) => {
       let mediaItems = [];
       let textItems = [];
 
-      for (const itemId of trackItemIds) {
+      for (let trackIndex = 0; trackIndex < trackItemIds.length; trackIndex++) {
+        const itemId = trackItemIds[trackIndex];
         const itemDetails = trackItemDetailsMap[itemId];
         const trackItem = trackItemsMap[itemId];
+
+        console.log(`Processing trackItemIds[${trackIndex}]: ${itemId} (trackIndex will be ${trackIndex})`);
 
         if (itemDetails && itemDetails.details && trackItem) {
           const details = itemDetails.details;
@@ -475,11 +478,14 @@ const createVideoFromProject = async (projectData, renderId) => {
           const top = parseInt(String(details.top || '0').replace('px', '')) || 0;
           const left = parseInt(String(details.left || '0').replace('px', '')) || 0;
 
+          console.log(`Item ${itemId}: type=${itemType}, trackIndex=${trackIndex}, position=(${left},${top}), timing=${startTime}s-${endTime}s`);
+
           if (itemType === 'text') {
             // Handle text items
             textItems.push({
               id: itemId,
               type: 'text',
+              trackIndex, // Preserve original order for z-index
               text: details.text || '',
               startTime,
               endTime,
@@ -537,6 +543,7 @@ const createVideoFromProject = async (projectData, renderId) => {
             mediaItems.push({
               id: itemId,
               type: itemType,
+              trackIndex, // Preserve original order for z-index
               src: details.src,
               startTime,
               endTime,
@@ -616,8 +623,12 @@ const createVideoFromProject = async (projectData, renderId) => {
         return;
       }
 
-      // Sort media items by start time for proper layering
-      mediaItems.sort((a, b) => a.startTime - b.startTime);
+      // IMPORTANT: Preserve trackItemIds order for correct z-index layering
+      // The first item in trackItemIds should be at the bottom (lowest z-index)
+      // The last item in trackItemIds should be at the top (highest z-index)
+      // DO NOT sort by startTime as it breaks the intended layer ordering
+      console.log('Preserving trackItemIds order for correct z-index layering');
+      console.log('Layer order (bottom to top):', trackItemIds);
 
       if (mediaItems.length > 1) {
         console.log('Multiple media files detected - enabling multi-layer composition');
@@ -709,24 +720,29 @@ const createVideoWithMedia = async (mediaFiles, textItems, outputPath, width, he
     // Multiple media files or combination of media and text - use complex composition
     console.log('Creating multi-layer video with media and text...');
 
-    // Sort by start time (earliest first becomes base layer)
-    const sortedFiles = [...mediaFiles].sort((a, b) => a.startTime - b.startTime);
+    // IMPORTANT: Sort by trackIndex to preserve trackItemIds order for correct z-index layering
+    // First item in trackItemIds = bottom layer (lowest z-index)
+    // Last item in trackItemIds = top layer (highest z-index)
+    const sortedFiles = [...mediaFiles].sort((a, b) => a.trackIndex - b.trackIndex);
 
-    console.log('Layer composition:');
+    // Sort text items by trackIndex as well for consistent layering
+    const sortedTextItems = [...textItems].sort((a, b) => a.trackIndex - b.trackIndex);
+
+    console.log('Layer composition (correct z-index order):');
     sortedFiles.forEach((file, index) => {
-      console.log(`  Media Layer ${index}: ${file.type} from ${file.startTime}s to ${file.startTime + file.duration}s`);
+      console.log(`  Media Layer ${index} (trackIndex: ${file.trackIndex}): ${file.type} from ${file.startTime}s to ${file.startTime + file.duration}s`);
       console.log(`    Position: ${file.left}, ${file.top} | Size: ${file.width}x${file.height}`);
       console.log(`    Source: ${file.src.substring(0, 60)}...`);
     });
 
-    textItems.forEach((item, index) => {
-      console.log(`  Text Layer ${index}: "${item.text.substring(0, 30)}..." from ${item.startTime}s to ${item.startTime + item.duration}s`);
+    sortedTextItems.forEach((item, index) => {
+      console.log(`  Text Layer ${index} (trackIndex: ${item.trackIndex}): "${item.text.substring(0, 30)}..." from ${item.startTime}s to ${item.startTime + item.duration}s`);
       console.log(`    Position: ${item.left}, ${item.top} | Size: ${item.width}x${item.height}`);
       console.log(`    Style: ${item.fontSize}px ${item.fontFamily}, ${item.color}`);
     });
 
-    // Create multi-layer video with both media and text
-    createMultiLayerVideoWithText(sortedFiles, textItems, outputPath, width, height, duration, fps, renderId)
+    // Create multi-layer video with both media and text (both sorted by trackIndex)
+    createMultiLayerVideoWithText(sortedFiles, sortedTextItems, outputPath, width, height, duration, fps, renderId)
       .then(resolve)
       .catch((error) => {
         console.error('Multi-layer composition failed:', error);
@@ -766,14 +782,24 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
         console.log('Applying timing constraints and/or positioning to single image');
         console.log(`Image positioning: left=${left}, top=${top}`);
 
-        // Use complex filter to apply timing constraints and positioning
+        // Use complex filter to apply timing constraints, positioning, and styling
+        let imageFilter = `[0:v]`;
+
+        // Apply image styling effects (opacity, blur, brightness, etc.)
+        imageFilter += buildVideoStyleFilters(mediaFile);
+
+        // Scale the image
+        imageFilter += `scale=${width}:${height}[img_styled]`;
+
         const complexFilters = [
-          `[0:v]scale=${width}:${height}[img_scaled]`,
+          imageFilter,
           `color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`,
           hasTimingConstraints
-            ? `[bg][img_scaled]overlay=${left}:${top}:enable='between(t,${mediaFile.startTime},${mediaFile.endTime})'[final]`
-            : `[bg][img_scaled]overlay=${left}:${top}[final]`
+            ? `[bg][img_styled]overlay=${left}:${top}:enable='between(t,${mediaFile.startTime},${mediaFile.endTime})'[final]`
+            : `[bg][img_styled]overlay=${left}:${top}[final]`
         ];
+
+        console.log(`Single image styling applied: opacity=${mediaFile.opacity}%, blur=${mediaFile.blur}, brightness=${mediaFile.brightness}%`);
 
         ffmpeg()
           .input(mediaFile.localPath)
@@ -1283,10 +1309,17 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
         .inputOptions(['-loop 1', `-t ${duration}`]);
     });
 
-    // Add video inputs
+    // Add video inputs with proper duration handling
     videoFiles.forEach((layer) => {
       command = command
         .input(layer.localPath);
+
+      // Log video input details for debugging
+      console.log(`Video input: ${layer.localPath}`);
+      console.log(`  Duration: ${layer.duration}s, Start: ${layer.startTime}s, End: ${layer.endTime}s`);
+      if (layer.trimStart !== undefined && layer.trimDuration !== undefined) {
+        console.log(`  Trim: ${layer.trimStart}s to ${layer.trimStart + layer.trimDuration}s`);
+      }
     });
 
     // Add audio inputs
@@ -1297,9 +1330,18 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
     // Build complex filter for video, audio, and text with proper timing constraints
     const complexFilters = [];
 
-    // Scale all images
+    // Scale all images and apply styling effects
     imageFiles.forEach((layer, index) => {
-      complexFilters.push(`[${index}:v]scale=${layer.width}:${layer.height}[img${index + 1}]`);
+      let filterChain = `[${index}:v]`;
+
+      // Apply image styling effects (similar to video styling)
+      filterChain += buildVideoStyleFilters(layer);
+
+      // Scale the image
+      filterChain += `scale=${layer.width}:${layer.height}[img${index + 1}]`;
+      complexFilters.push(filterChain);
+
+      console.log(`Image ${index + 1} styling applied: opacity=${layer.opacity}%, blur=${layer.blur}, brightness=${layer.brightness}%`);
     });
 
     // Scale all videos (with trim handling and styling effects)
@@ -1309,7 +1351,19 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
 
       // Apply trim if needed
       if (layer.trimStart !== undefined && layer.trimDuration !== undefined) {
-        filterChain += `trim=start=${layer.trimStart}:duration=${layer.trimDuration},setpts=PTS-STARTPTS,`;
+        // IMPORTANT: Handle video trimming and looping for display duration
+        console.log(`  Video ${index+1}: Trimming from ${layer.trimStart}s for ${layer.trimDuration}s duration`);
+        console.log(`  Video ${index+1}: Display duration is ${layer.duration}s`);
+
+        // If display duration is longer than trim duration, we need to loop the trimmed video
+        if (layer.duration > layer.trimDuration) {
+          console.log(`  Video ${index+1}: Display duration (${layer.duration}s) > trim duration (${layer.trimDuration}s), enabling loop`);
+          // Trim the video and then loop it to fill the display duration
+          filterChain += `trim=start=${layer.trimStart}:duration=${layer.trimDuration},setpts=PTS-STARTPTS,loop=loop=-1:size=1:start=0,`;
+        } else {
+          // Display duration matches or is shorter than trim duration
+          filterChain += `trim=start=${layer.trimStart}:duration=${layer.trimDuration},setpts=PTS-STARTPTS,`;
+        }
       }
 
       // Apply video styling effects (except box shadow)
@@ -1361,36 +1415,58 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
     // Create background
     complexFilters.push(`color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`);
 
-    // Build overlay chain - each visual layer (image/video) overlays on the previous result
+    // Build overlay chain - IMPORTANT: Process ALL visual layers in trackIndex order
+    // This ensures correct z-index layering where last item in trackItemIds appears on top
     let currentLayer = 'bg';
-    let layerIndex = 0;
 
-    // Add image layers
-    imageFiles.forEach((layer, index) => {
-      const left = parseInt(String(layer.left).replace('px', '')) || 0;
-      const top = parseInt(String(layer.top).replace('px', '')) || 0;
-      const nextLayer = layerIndex === visualFiles.length - 1 ? 'video_final' : `bg_with_layer${layerIndex + 1}`;
+    // Combine and sort ALL visual files by trackIndex to maintain correct layer order
+    const allVisualLayers = [...imageFiles, ...videoFiles].sort((a, b) => a.trackIndex - b.trackIndex);
 
-      complexFilters.push(
-        `[${currentLayer}][img${index + 1}]overlay=${left}:${top}:enable='between(t,${layer.startTime},${layer.endTime})'[${nextLayer}]`
-      );
-
-      currentLayer = nextLayer;
-      layerIndex++;
+    console.log('Building overlay chain in correct trackIndex order:');
+    console.log('Expected layer order (bottom to top): trackIndex 0, 1, 2...');
+    allVisualLayers.forEach((layer, index) => {
+      console.log(`  Overlay Layer ${index} (trackIndex: ${layer.trackIndex}, id: ${layer.id}): ${layer.type} at ${layer.left},${layer.top}`);
+      console.log(`    Z-index position: ${layer.trackIndex === 0 ? 'BOTTOM' : layer.trackIndex === allVisualLayers.length - 1 ? 'TOP' : 'MIDDLE'}`);
     });
 
-    // Add video layers
-    videoFiles.forEach((layer, index) => {
+    allVisualLayers.forEach((layer, index) => {
       const left = parseInt(String(layer.left).replace('px', '')) || 0;
       const top = parseInt(String(layer.top).replace('px', '')) || 0;
-      const nextLayer = layerIndex === visualFiles.length - 1 ? 'video_final' : `bg_with_layer${layerIndex + 1}`;
+      const nextLayer = index === allVisualLayers.length - 1 ? 'video_final' : `bg_with_layer${index + 1}`;
+
+      // Determine the correct input label based on layer type
+      let inputLabel;
+      if (layer.type === 'image') {
+        const imgIndex = imageFiles.findIndex(img => img.id === layer.id) + 1;
+        inputLabel = `img${imgIndex}`;
+      } else if (layer.type === 'video') {
+        const vidIndex = videoFiles.findIndex(vid => vid.id === layer.id) + 1;
+        inputLabel = `vid${vidIndex}`;
+      }
+
+      // For videos, use display timing for overlay (not trim duration)
+      // The trim is applied to the video input, but overlay timing should match display timing
+      let overlayTiming;
+      if (layer.type === 'video') {
+        // IMPORTANT: Always use display timing for video overlays, regardless of trim
+        // The trim is handled in the video filter chain, but overlay timing controls when the video appears
+        overlayTiming = `enable='between(t,${layer.startTime},${layer.endTime})'`;
+        console.log(`  Video overlay timing: ${layer.startTime}s to ${layer.endTime}s (display duration: ${layer.duration}s)`);
+        if (layer.trimDuration !== undefined && layer.trimDuration !== null) {
+          console.log(`    Video trim applied separately: ${layer.trimStart}s to ${layer.trimStart + layer.trimDuration}s (trimmed duration: ${layer.trimDuration}s)`);
+        }
+      } else {
+        // Use display timing for images and other media
+        overlayTiming = `enable='between(t,${layer.startTime},${layer.endTime})'`;
+        console.log(`  Media overlay timing: ${layer.startTime}s to ${layer.endTime}s`);
+      }
 
       complexFilters.push(
-        `[${currentLayer}][vid${index + 1}]overlay=${left}:${top}:enable='between(t,${layer.startTime},${layer.endTime})'[${nextLayer}]`
+        `[${currentLayer}][${inputLabel}]overlay=${left}:${top}:${overlayTiming}[${nextLayer}]`
       );
 
       currentLayer = nextLayer;
-      layerIndex++;
+      console.log(`  Applied overlay: [${currentLayer}][${inputLabel}] at ${left}:${top}`);
     });
 
     // Add text overlays to the video
@@ -1473,6 +1549,7 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
     let audioTrackIndex = 1;
 
     // Add video audio sources (include video audio unless explicitly muted)
+    // Note: We'll add error handling for videos without audio streams
     videoFiles.forEach((videoFile, index) => {
       const videoInputIndex = imageFiles.length + index;
 
@@ -1485,7 +1562,8 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
           type: 'video_audio',
           inputIndex: videoInputIndex,
           audioIndex: audioTrackIndex,
-          volumeLevel: volumeLevel
+          volumeLevel: volumeLevel,
+          hasAudioStream: true // We'll assume true and handle errors gracefully
         });
 
         console.log(`Including video audio ${audioTrackIndex}: volume=${volumeLevel.toFixed(2)} (${videoFile.volume || 100}%)`);
@@ -1595,6 +1673,211 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
       })
       .on('error', (err) => {
         console.error('FFmpeg error in multi-layer with text composition:', err);
+
+        // Check if the error is related to missing audio streams
+        if (err.message && err.message.includes('matches no streams') && err.message.includes(':a')) {
+          console.log('Audio stream error detected - retrying without video audio...');
+
+          // Retry without video audio streams
+          createMultiLayerVideoWithoutAudio(imageFiles, videoFiles, textItems, outputPath, width, height, duration, fps, renderId)
+            .then(resolve)
+            .catch(reject);
+        } else {
+          reject(err);
+        }
+      })
+      .run();
+  });
+};
+
+// Fallback multi-layer video creation without audio (for videos without audio streams)
+const createMultiLayerVideoWithoutAudio = async (imageFiles, videoFiles, textItems, outputPath, width, height, duration, fps, renderId) => {
+  return new Promise((resolve, reject) => {
+    console.log('Creating multi-layer video WITHOUT audio (fallback mode)...');
+
+    // Build FFmpeg command with all inputs (no audio processing)
+    let command = ffmpeg();
+
+    // Add image inputs
+    imageFiles.forEach((layer) => {
+      command = command
+        .input(layer.localPath)
+        .inputOptions(['-loop 1', `-t ${duration}`]);
+    });
+
+    // Add video inputs
+    videoFiles.forEach((layer) => {
+      command = command.input(layer.localPath);
+    });
+
+    // Build complex filter for video and text only (no audio)
+    const complexFilters = [];
+
+    // Scale all images and apply styling effects
+    imageFiles.forEach((layer, index) => {
+      let filterChain = `[${index}:v]`;
+
+      // Apply image styling effects (similar to video styling)
+      filterChain += buildVideoStyleFilters(layer);
+
+      // Scale the image
+      filterChain += `scale=${layer.width}:${layer.height}[img${index + 1}]`;
+      complexFilters.push(filterChain);
+
+      console.log(`Image ${index + 1} styling applied (fallback): opacity=${layer.opacity}%, blur=${layer.blur}, brightness=${layer.brightness}%`);
+    });
+
+    // Scale all videos (with trim handling and styling effects)
+    videoFiles.forEach((layer, index) => {
+      const inputIndex = imageFiles.length + index;
+      let filterChain = `[${inputIndex}:v]`;
+
+      // Apply trim if needed
+      if (layer.trimStart !== undefined && layer.trimDuration !== undefined) {
+        // IMPORTANT: Handle video trimming and looping for display duration (fallback)
+        console.log(`  Video ${index+1} (fallback): Trimming from ${layer.trimStart}s for ${layer.trimDuration}s duration`);
+        console.log(`  Video ${index+1} (fallback): Display duration is ${layer.duration}s`);
+
+        // If display duration is longer than trim duration, we need to loop the trimmed video
+        if (layer.duration > layer.trimDuration) {
+          console.log(`  Video ${index+1} (fallback): Display duration (${layer.duration}s) > trim duration (${layer.trimDuration}s), enabling loop`);
+          // Trim the video and then loop it to fill the display duration
+          filterChain += `trim=start=${layer.trimStart}:duration=${layer.trimDuration},setpts=PTS-STARTPTS,loop=loop=-1:size=1:start=0,`;
+        } else {
+          // Display duration matches or is shorter than trim duration
+          filterChain += `trim=start=${layer.trimStart}:duration=${layer.trimDuration},setpts=PTS-STARTPTS,`;
+        }
+      }
+
+      // Apply video styling effects
+      filterChain += buildVideoStyleFilters(layer);
+
+      // Calculate final dimensions with transform scaling
+      let finalWidth = layer.width;
+      let finalHeight = layer.height;
+
+      // Extract scale from transform if present
+      if (layer.transform && layer.transform.includes('scale')) {
+        const scaleMatch = layer.transform.match(/scale\(([^)]+)\)/);
+        if (scaleMatch) {
+          const scaleValues = scaleMatch[1].split(',').map(v => parseFloat(v.trim()));
+          if (scaleValues.length >= 2) {
+            finalWidth = Math.round(layer.width * scaleValues[0]);
+            finalHeight = Math.round(layer.height * scaleValues[1]);
+          } else if (scaleValues.length === 1) {
+            finalWidth = Math.round(layer.width * scaleValues[0]);
+            finalHeight = Math.round(layer.height * scaleValues[0]);
+          }
+        }
+      }
+
+      // Scale the video
+      filterChain += `scale=${finalWidth}:${finalHeight}[vid${index + 1}]`;
+      complexFilters.push(filterChain);
+    });
+
+    // Create background
+    complexFilters.push(`color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`);
+
+    // Build overlay chain - IMPORTANT: Process ALL visual layers in trackIndex order
+    // This ensures correct z-index layering where last item in trackItemIds appears on top
+    let currentLayer = 'bg';
+
+    // Combine and sort ALL visual files by trackIndex to maintain correct layer order
+    const allVisualLayers = [...imageFiles, ...videoFiles].sort((a, b) => a.trackIndex - b.trackIndex);
+
+    console.log('Building overlay chain in correct trackIndex order (fallback mode):');
+    allVisualLayers.forEach((layer, index) => {
+      console.log(`  Layer ${index} (trackIndex: ${layer.trackIndex}): ${layer.type} at ${layer.left},${layer.top}`);
+    });
+
+    allVisualLayers.forEach((layer, index) => {
+      const left = parseInt(String(layer.left).replace('px', '')) || 0;
+      const top = parseInt(String(layer.top).replace('px', '')) || 0;
+      const nextLayer = index === allVisualLayers.length - 1 ? 'video_final' : `bg_with_layer${index + 1}`;
+
+      // Determine the correct input label based on layer type
+      let inputLabel;
+      if (layer.type === 'image') {
+        const imgIndex = imageFiles.findIndex(img => img.id === layer.id) + 1;
+        inputLabel = `img${imgIndex}`;
+      } else if (layer.type === 'video') {
+        const vidIndex = videoFiles.findIndex(vid => vid.id === layer.id) + 1;
+        inputLabel = `vid${vidIndex}`;
+      }
+
+      // For videos, use display timing for overlay (not trim duration)
+      // The trim is applied to the video input, but overlay timing should match display timing
+      let overlayTiming;
+      if (layer.type === 'video') {
+        // IMPORTANT: Always use display timing for video overlays, regardless of trim
+        // The trim is handled in the video filter chain, but overlay timing controls when the video appears
+        overlayTiming = `enable='between(t,${layer.startTime},${layer.endTime})'`;
+        console.log(`  Video overlay timing (fallback): ${layer.startTime}s to ${layer.endTime}s (display duration: ${layer.duration}s)`);
+        if (layer.trimDuration !== undefined && layer.trimDuration !== null) {
+          console.log(`    Video trim applied separately (fallback): ${layer.trimStart}s to ${layer.trimStart + layer.trimDuration}s (trimmed duration: ${layer.trimDuration}s)`);
+        }
+      } else {
+        // Use display timing for images and other media
+        overlayTiming = `enable='between(t,${layer.startTime},${layer.endTime})'`;
+        console.log(`  Media overlay timing (fallback): ${layer.startTime}s to ${layer.endTime}s`);
+      }
+
+      complexFilters.push(
+        `[${currentLayer}][${inputLabel}]overlay=${left}:${top}:${overlayTiming}[${nextLayer}]`
+      );
+
+      currentLayer = nextLayer;
+      console.log(`  Applied overlay (fallback): [${currentLayer}][${inputLabel}] at ${left}:${top}`);
+    });
+
+    // Add text overlays if any
+    if (textItems.length > 0) {
+      let textCurrentLayer = 'video_final';
+      textItems.forEach((textItem, index) => {
+        const outputLabel = index === textItems.length - 1 ? 'final' : `text${index}`;
+
+        const drawTextOptions = [
+          `text='${textItem.text.replace(/'/g, "\\'")}'`,
+          `fontfile=/System/Library/Fonts/Arial.ttf`,
+          `fontsize=${textItem.fontSize}`,
+          `fontcolor=${textItem.color}`,
+          `x=${textItem.left}`,
+          `y=${textItem.top}`,
+          `enable='between(t,${textItem.startTime},${textItem.endTime})'`
+        ];
+
+        const textFilter = `[${textCurrentLayer}]drawtext=${drawTextOptions.join(':')}[${outputLabel}]`;
+        complexFilters.push(textFilter);
+        textCurrentLayer = outputLabel;
+      });
+    } else {
+      complexFilters.push(`[video_final]copy[final]`);
+    }
+
+    command
+      .complexFilter(complexFilters)
+      .output(outputPath)
+      .videoCodec('libx264')
+      .format('mp4')
+      .outputOptions(['-map [final]', '-pix_fmt yuv420p', '-preset fast', '-crf 23'])
+      .on('start', (commandLine) => {
+        console.log('Multi-layer WITHOUT audio FFmpeg command:', commandLine);
+      })
+      .on('progress', (progress) => {
+        console.log(`Multi-layer without audio progress: ${Math.round(progress.percent || 0)}%`);
+        if (renderJobs.has(renderId)) {
+          const job = renderJobs.get(renderId);
+          job.progress = Math.round(progress.percent || 0);
+          renderJobs.set(renderId, job);
+        }
+      })
+      .on('end', () => {
+        console.log('Multi-layer without audio composition completed successfully!');
+        resolve(outputPath);
+      })
+      .on('error', (err) => {
+        console.error('FFmpeg error in multi-layer without audio composition:', err);
         reject(err);
       })
       .run();
