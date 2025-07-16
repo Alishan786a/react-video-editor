@@ -13,10 +13,6 @@ import {
   getSelectionByIds,
 } from "./utils/target";
 import { getCurrentTime } from "@/utils/time";
-const size = {
-  width: 1080,
-  height: 1920,
-};
 
 let holdGroupPosition: Record<string, any> | null = null;
 let dragStartEnd = false;
@@ -30,7 +26,7 @@ export default function Scene({
   const viewerRef = useRef<InfiniteViewer>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [targets, setTargets] = useState<HTMLDivElement[]>([]);
-  const { activeIds, setState, trackItemDetailsMap, trackItemsMap, playerRef } =
+  const { activeIds, setState, trackItemDetailsMap, trackItemsMap, playerRef, size } =
     useStore();
   const moveableRef = useRef<Moveable>(null);
   const [selectionInfo, setSelectionInfo] =

@@ -22,11 +22,6 @@ import { enhanceDesignForExport } from "@/utils/export-enhancer";
 import useStore from "@/store/store";
 import { IDesign } from "@designcombo/types";
 import { generateId } from "@designcombo/timeline";
-
-const size = {
-  width: 1080,
-  height: 1920
-};
 export default function Navbar() {
   const handleUndo = () => {
     dispatch(HISTORY_UNDO);
@@ -106,7 +101,8 @@ const DownloadPopover = () => {
     trackItemsMap,
     trackItemDetailsMap,
     transitionsMap,
-    fps
+    fps,
+    size
   } = useStore();
 
   const handleExport = async () => {
@@ -347,7 +343,16 @@ const RESIZE_OPTIONS: ResizeOptionProps[] = [
 ];
 
 const ResizeVideo = () => {
-  const handleResize = () => {};
+  const { setSize, size } = useStore();
+
+  const handleResize = (resizeValue: ResizeValue) => {
+    console.log('Resizing canvas to:', resizeValue);
+    setSize({
+      width: resizeValue.width,
+      height: resizeValue.height
+    });
+  };
+
   return (
     <Popover>
       <PopoverTrigger asChild>
@@ -357,6 +362,10 @@ const ResizeVideo = () => {
       </PopoverTrigger>
       <PopoverContent className="w-60 z-[250]">
         <div className="grid gap-4 text-sm">
+          <div className="pb-2 border-b border-border">
+            <div className="text-xs text-muted-foreground">Current size</div>
+            <div className="font-medium">{size.width} × {size.height}</div>
+          </div>
           {RESIZE_OPTIONS.map((option, index) => (
             <ResizeOption
               key={index}

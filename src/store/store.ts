@@ -9,9 +9,15 @@ import {
 import { PlayerRef } from "@remotion/player";
 import { create } from "zustand";
 
+interface ISize {
+  width: number;
+  height: number;
+}
+
 interface ITimelineStore {
   duration: number;
   fps: number;
+  size: ISize;
   scale: ITimelineScaleState;
   scroll: ITimelineScrollState;
 
@@ -26,6 +32,7 @@ interface ITimelineStore {
   setTimeline: (timeline: CanvasTimeline) => void;
   setScale: (scale: ITimelineScaleState) => void;
   setScroll: (scroll: ITimelineScrollState) => void;
+  setSize: (size: ISize) => void;
   playerRef: React.RefObject<PlayerRef> | null;
   setPlayerRef: (playerRef: React.RefObject<PlayerRef> | null) => void;
 
@@ -36,6 +43,10 @@ const useStore = create<ITimelineStore>((set) => ({
   timeline: null,
   duration: 5000,
   fps: 30,
+  size: {
+    width: 1080,
+    height: 1920
+  },
   scale: {
     // 1x distance (second 0 to second 5, 5 segments).
     unit: 300,
@@ -67,6 +78,10 @@ const useStore = create<ITimelineStore>((set) => ({
   setScroll: (scroll: ITimelineScrollState) =>
     set(() => ({
       scroll: scroll
+    })),
+  setSize: (size: ISize) =>
+    set(() => ({
+      size: size
     })),
   setState: async (state) => {
     return set({ ...state });
