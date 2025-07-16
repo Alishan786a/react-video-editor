@@ -1803,7 +1803,7 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
           console.log('Audio mixing error detected, falling back to simpler approach...');
 
           // Try fallback - create video without complex audio mixing
-          createSimpleFallback(mediaFiles, textItems, outputPath, width, height, duration, fps, renderId)
+          createSimpleFallback(mediaFiles, textItems, outputPath, width, height, duration, fps, renderId, animations)
             .then(resolve)
             .catch(reject);
           return;
@@ -1822,7 +1822,7 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
 };
 
 // Simple fallback function for when audio mixing fails
-const createSimpleFallback = async (mediaFiles, textItems, outputPath, width, height, duration, fps, renderId) => {
+const createSimpleFallback = async (mediaFiles, textItems, outputPath, width, height, duration, fps, renderId, animations = []) => {
   console.log('Using simple fallback approach...');
 
   // Separate media types
@@ -1847,12 +1847,12 @@ const createSimpleFallback = async (mediaFiles, textItems, outputPath, width, he
   } else {
     // Multi-layer fallback without complex audio mixing
     console.log('Using multi-layer fallback without audio mixing');
-    return createMultiLayerVideo(mediaFiles, outputPath, width, height, duration, fps, renderId);
+    return createMultiLayerVideo(mediaFiles, outputPath, width, height, duration, fps, renderId, animations);
   }
 };
 
 // Enhanced multi-layer video creation with audio support
-const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, duration, fps, renderId) => {
+const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, duration, fps, renderId, animations = []) => {
   console.log(`Creating multi-layer video with ${mediaFiles.length} layers...`);
 
   // Separate media types
