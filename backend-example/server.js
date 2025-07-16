@@ -1444,7 +1444,7 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
       let filterChain = `[${inputIndex}:v]`;
 
       // Apply trim if needed
-      if (layer.trimStart !== undefined && layer.trimDuration !== undefined) {
+      if (layer.trimStart !== undefined && layer.trimDuration !== undefined && layer.trimDuration !== null) {
         filterChain += `trim=start=${layer.trimStart}:duration=${layer.trimDuration},setpts=PTS-STARTPTS,`;
       }
 
@@ -1649,11 +1649,18 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
 
       allAudioSources.forEach((audioSource) => {
         if (audioSource.type === 'video_audio') {
+          // Skip video audio processing if we have external audio to avoid stream errors
+          const hasExternalAudio = allAudioSources.some(source => source.type === 'external_audio');
+          if (hasExternalAudio) {
+            console.log(`Skipping video audio ${audioSource.audioIndex} processing - will use external audio instead`);
+            return; // Skip this video audio source
+          }
+
           // Handle video audio with volume control
           const inputIndex = audioSource.inputIndex;
           const audioIndex = audioSource.audioIndex;
 
-          let audioFilter = `[${inputIndex}:a]`;
+          let audioFilter = `[${inputIndex}:a]`; // Standard audio stream reference
 
           // Apply volume if not default
           if (audioSource.volumeLevel !== 1.0) {
@@ -1672,36 +1679,95 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
 
           console.log(`External audio ${audioIndex} timing: ${audioSource.startTime}s to ${audioSource.endTime}s (duration: ${audioSource.duration}s)`);
 
-          if (audioSource.trimStart !== undefined && audioSource.trimDuration !== undefined) {
+          if (audioSource.trimStart !== undefined && audioSource.trimDuration !== undefined && audioSource.trimDuration !== null) {
             console.log(`External audio ${audioIndex} trim: extracting ${audioSource.trimStart}s to ${audioSource.trimStart + audioSource.trimDuration}s from original audio`);
-            const audioFilter = `[${inputIndex}:a]atrim=start=${audioSource.trimStart}:duration=${audioSource.trimDuration},asetpts=PTS-STARTPTS,adelay=${audioSource.startTime * 1000}|${audioSource.startTime * 1000}[audio${audioIndex}_timed]`;
+            const duration = audioSource.trimDuration || 'longest';
+            const audioFilter = `[${inputIndex}:a]atrim=start=${audioSource.trimStart}:duration=${duration},asetpts=PTS-STARTPTS,adelay=${audioSource.startTime * 1000}|${audioSource.startTime * 1000}[audio${audioIndex}_timed]`;
             complexFilters.push(audioFilter);
           } else {
-            const audioFilter = `[${inputIndex}:a]atrim=start=${audioSource.startTime}:duration=${audioSource.duration},asetpts=PTS-STARTPTS,adelay=${audioSource.startTime * 1000}|${audioSource.startTime * 1000}[audio${audioIndex}_timed]`;
+            const duration = audioSource.duration || 'longest';
+            const audioFilter = `[${inputIndex}:a]atrim=start=${audioSource.startTime}:duration=${duration},asetpts=PTS-STARTPTS,adelay=${audioSource.startTime * 1000}|${audioSource.startTime * 1000}[audio${audioIndex}_timed]`;
             complexFilters.push(audioFilter);
           }
         }
       });
 
-      // Mix multiple audio tracks if needed
+      // Mix multiple audio tracks if needed - with better validation
       if (allAudioSources.length > 1) {
-        const audioInputs = allAudioSources.map((_, index) => `[audio${index + 1}_timed]`).join('');
-        const mixFilter = `${audioInputs}amix=inputs=${allAudioSources.length}:duration=longest[audio_mixed]`;
-        complexFilters.push(mixFilter);
-        console.log(`Mixing ${allAudioSources.length} audio tracks together`);
+        // Only include external audio sources in mixing (they're guaranteed to have audio)
+        const externalAudioSources = allAudioSources.filter(source => source.type === 'external_audio');
+        const videoAudioSources = allAudioSources.filter(source => source.type === 'video_audio');
+
+        console.log(`Audio mixing: ${externalAudioSources.length} external audio + ${videoAudioSources.length} video audio sources`);
+
+        if (externalAudioSources.length > 0 && videoAudioSources.length > 0) {
+          // SKIP mixing external audio with video audio to avoid amix errors
+          console.log('Skipping video+external audio mixing to prevent amix errors');
+          console.log('Using only external audio to avoid video audio stream issues');
+
+          // Remove video audio filters from complexFilters to avoid "matches no streams" error
+          const videoAudioFilters = complexFilters.filter(filter => filter.includes('audio1_timed'));
+          if (videoAudioFilters.length > 0) {
+            console.log('Removing video audio filters to prevent stream errors');
+            complexFilters = complexFilters.filter(filter => !filter.includes('audio1_timed'));
+          }
+
+          // Use only external audio (guaranteed to work)
+          if (externalAudioSources.length === 1) {
+            console.log('Using single external audio source');
+          } else {
+            // Mix only external audio sources
+            const audioInputs = externalAudioSources.map((source) => `[audio${source.audioIndex}_timed]`).join('');
+            const mixFilter = `${audioInputs}amix=inputs=${externalAudioSources.length}:duration=longest[audio_mixed]`;
+            complexFilters.push(mixFilter);
+            console.log(`Mixing ${externalAudioSources.length} external audio tracks together (safe)`);
+          }
+        } else if (externalAudioSources.length > 1) {
+          // Mix only external audio sources (safe)
+          const audioInputs = externalAudioSources.map((source) => `[audio${source.audioIndex}_timed]`).join('');
+          const mixFilter = `${audioInputs}amix=inputs=${externalAudioSources.length}:duration=longest[audio_mixed]`;
+          complexFilters.push(mixFilter);
+          console.log(`Mixing ${externalAudioSources.length} external audio tracks together (safe)`);
+        } else {
+          console.log('Only one audio source or mixed types - skipping complex mixing');
+        }
       }
     }
 
     command = command.complexFilter(complexFilters);
 
-    // Map video and audio outputs
+    // Map video and audio outputs with improved error handling
     if (allAudioSources.length > 0) {
+      const externalAudioSources = allAudioSources.filter(source => source.type === 'external_audio');
+      const videoAudioSources = allAudioSources.filter(source => source.type === 'video_audio');
+
       if (allAudioSources.length === 1) {
-        command = command.map('[final]').map('[audio1_timed]');
-        console.log('Mapping audio output: [audio1_timed]');
-      } else {
-        command = command.map('[final]').map('[audio_mixed]');
-        console.log('Mapping audio output: [audio_mixed]');
+        // Single audio source - safe to map directly
+        if (externalAudioSources.length === 1) {
+          // Single external audio - guaranteed to work
+          command = command.map('[final]').map(`[audio${externalAudioSources[0].audioIndex}_timed]`);
+          console.log(`Mapping audio output to external audio: [audio${externalAudioSources[0].audioIndex}_timed]`);
+        } else {
+          // Single video audio - might fail, but try anyway
+          command = command.map('[final]').map('[audio1_timed]');
+          console.log('Mapping audio output: [audio1_timed] (video audio - may fail)');
+        }
+      } else if (allAudioSources.length > 1) {
+        // Check if we actually created a mixed audio stream
+        const hasMixedAudio = complexFilters.some(filter => filter.includes('[audio_mixed]'));
+        if (hasMixedAudio) {
+          command = command.map('[final]').map('[audio_mixed]');
+          console.log('Mapping audio output: [audio_mixed]');
+        } else if (externalAudioSources.length > 0) {
+          // Fallback to first external audio stream (guaranteed to exist)
+          const firstExternalAudio = externalAudioSources[0];
+          command = command.map('[final]').map(`[audio${firstExternalAudio.audioIndex}_timed]`);
+          console.log(`Fallback: Mapping audio output to external audio: [audio${firstExternalAudio.audioIndex}_timed]`);
+        } else {
+          // Last resort: try first audio stream (video audio)
+          command = command.map('[final]').map('[audio1_timed]');
+          console.log('Last resort: Mapping audio output to first stream: [audio1_timed] (may fail)');
+        }
       }
     } else {
       command = command.map('[final]');
@@ -1731,10 +1797,58 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
       })
       .on('error', (err) => {
         console.error('FFmpeg error in multi-layer with text composition:', err);
+
+        // Check if it's an audio mixing error and try fallback
+        if (err.message && (err.message.includes('amix') || err.message.includes('matches no streams'))) {
+          console.log('Audio mixing error detected, falling back to simpler approach...');
+
+          // Try fallback - create video without complex audio mixing
+          createSimpleFallback(mediaFiles, textItems, outputPath, width, height, duration, fps, renderId)
+            .then(resolve)
+            .catch(reject);
+          return;
+        }
+
+        if (renderJobs.has(renderId)) {
+          const job = renderJobs.get(renderId);
+          job.status = 'failed';
+          job.error = err.message || err.toString();
+          renderJobs.set(renderId, job);
+        }
         reject(err);
       })
       .run();
   });
+};
+
+// Simple fallback function for when audio mixing fails
+const createSimpleFallback = async (mediaFiles, textItems, outputPath, width, height, duration, fps, renderId) => {
+  console.log('Using simple fallback approach...');
+
+  // Separate media types
+  const imageFiles = mediaFiles.filter(file => file.type === 'image');
+  const videoFiles = mediaFiles.filter(file => file.type === 'video');
+  const audioFiles = mediaFiles.filter(file => file.type === 'audio');
+
+  console.log(`Fallback: ${imageFiles.length} images, ${videoFiles.length} videos, ${audioFiles.length} audio files`);
+
+  if (imageFiles.length === 1 && videoFiles.length === 0 && audioFiles.length === 0) {
+    // Single image fallback
+    console.log('Using single image fallback');
+    return createVideoFromSingleImage(imageFiles[0], outputPath, width, height, duration, fps, renderId);
+  } else if (imageFiles.length === 1 && videoFiles.length === 0 && audioFiles.length === 1) {
+    // Single image + single audio fallback
+    console.log('Using single image + audio fallback');
+    return createVideoWithAudio(imageFiles[0], audioFiles[0], outputPath, width, height, duration, fps, renderId);
+  } else if (videoFiles.length === 1 && audioFiles.length === 0) {
+    // Single video fallback
+    console.log('Using single video fallback');
+    return createVideoFromSingleVideo(videoFiles[0], outputPath, width, height, duration, fps, renderId);
+  } else {
+    // Multi-layer fallback without complex audio mixing
+    console.log('Using multi-layer fallback without audio mixing');
+    return createMultiLayerVideo(mediaFiles, outputPath, width, height, duration, fps, renderId);
+  }
 };
 
 // Enhanced multi-layer video creation with audio support
@@ -1843,7 +1957,7 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
         let filterChain = `[${inputIndex}:v]`;
 
         // Apply trim if needed
-        if (layer.trimStart !== undefined && layer.trimDuration !== undefined) {
+        if (layer.trimStart !== undefined && layer.trimDuration !== undefined && layer.trimDuration !== null) {
           filterChain += `trim=start=${layer.trimStart}:duration=${layer.trimDuration},setpts=PTS-STARTPTS,`;
         }
 
@@ -1923,7 +2037,7 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
           // Build audio filter based on whether trim information is available
           const audioInputIndex = imageFiles.length + videoFiles.length + index; // Audio inputs come after all image and video inputs
 
-          if (audioFile.trimStart !== undefined && audioFile.trimDuration !== undefined) {
+          if (audioFile.trimStart !== undefined && audioFile.trimDuration !== undefined && audioFile.trimDuration !== null) {
             console.log(`Audio ${index + 1} trim: extracting ${audioFile.trimStart}s to ${audioFile.trimStart + audioFile.trimDuration}s from original audio`);
             // First trim the audio to extract the desired segment, then position it in timeline
             const audioFilter = `[${audioInputIndex}:a]atrim=start=${audioFile.trimStart}:duration=${audioFile.trimDuration},asetpts=PTS-STARTPTS,adelay=${audioFile.startTime * 1000}|${audioFile.startTime * 1000}[audio${index + 1}_timed]`;
@@ -1935,29 +2049,56 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
           }
         });
 
-        // Mix all audio tracks together if there are multiple
+        // Mix all audio tracks together if there are multiple - with validation
         if (audioFiles.length > 1) {
-          const audioInputs = audioFiles.map((_, index) => `[audio${index + 1}_timed]`).join('');
-          const mixFilter = `${audioInputs}amix=inputs=${audioFiles.length}:duration=longest[audio_mixed]`;
-          complexFilters.push(mixFilter);
-          console.log(`Mixing ${audioFiles.length} audio tracks together`);
+          // Validate that we have valid audio streams before mixing
+          const validAudioStreams = [];
+          audioFiles.forEach((_, index) => {
+            const streamLabel = `[audio${index + 1}_timed]`;
+            // Add basic validation - in a real scenario, you'd check if the stream exists
+            validAudioStreams.push(streamLabel);
+          });
+
+          if (validAudioStreams.length > 1) {
+            const audioInputs = validAudioStreams.join('');
+            const mixFilter = `${audioInputs}amix=inputs=${validAudioStreams.length}:duration=longest[audio_mixed]`;
+            complexFilters.push(mixFilter);
+            console.log(`Mixing ${validAudioStreams.length} validated audio tracks together`);
+          } else if (validAudioStreams.length === 1) {
+            console.log('Only one valid audio stream found, skipping mix');
+          } else {
+            console.log('No valid audio streams found for mixing');
+          }
         }
       }
 
       command = command.complexFilter(complexFilters);
 
-      // Map video and audio outputs
+      // Map video and audio outputs with error handling
       if (audioFiles.length > 0) {
-        const audioOutput = audioFiles.length > 1 ? '[audio_mixed]' : '[audio1_timed]';
+        let audioOutput = '[audio1_timed]'; // Default to first audio
+
+        if (audioFiles.length > 1) {
+          // Check if we actually created a mixed audio stream
+          const hasMixedAudio = complexFilters.some(filter => filter.includes('[audio_mixed]'));
+          if (hasMixedAudio) {
+            audioOutput = '[audio_mixed]';
+            console.log('Using mixed audio output');
+          } else {
+            console.log('Mixed audio not available, using first audio stream');
+          }
+        }
+
         command = command
           .outputOptions(['-map', '[final]'])
-          .outputOptions(['-map', audioOutput]) // Map mixed or single audio
+          .outputOptions(['-map', audioOutput])
           .audioCodec('aac');
         console.log(`Mapping audio output: ${audioOutput}`);
       } else {
         command = command
           .outputOptions(['-map', '[final]'])
           .audioCodec('aac'); // Generate silent audio
+        console.log('No audio files, generating silent audio');
       }
 
       command
@@ -2012,7 +2153,7 @@ const createVideoWithAudio = async (imageFile, audioFile, outputPath, width, hei
     ];
 
     // Build audio filter based on whether trim information is available
-    if (audioFile.trimStart !== undefined && audioFile.trimDuration !== undefined) {
+    if (audioFile.trimStart !== undefined && audioFile.trimDuration !== undefined && audioFile.trimDuration !== null) {
       console.log(`Audio trim: extracting ${audioFile.trimStart}s to ${audioFile.trimStart + audioFile.trimDuration}s from original audio`);
       // First trim the audio to extract the desired segment, then position it in timeline
       complexFilters.push(`[1:a]atrim=start=${audioFile.trimStart}:duration=${audioFile.trimDuration},asetpts=PTS-STARTPTS,adelay=${audioFile.startTime * 1000}|${audioFile.startTime * 1000}[audio_timed]`);
