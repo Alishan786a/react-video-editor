@@ -5,6 +5,72 @@ const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const ffmpeg = require('fluent-ffmpeg');
+
+// Archive-inspired effect mapping to FFmpeg filters
+const getFFmpegEffectFilter = (effectType) => {
+  switch (effectType) {
+    case 'blackAndWhite':
+      return 'colorchannelmixer=.3:.4:.3:0:.3:.4:.3:0:.3:.4:.3'; // More accurate grayscale
+    case 'sepia':
+      return 'colorchannelmixer=.393:.769:.189:0:.349:.686:.168:0:.272:.534:.131'; // Sepia tone
+    case 'invert':
+      return 'negate'; // Invert colors
+    case 'saturate':
+      return 'eq=saturation=2.0'; // Increase saturation
+    case 'none':
+    default:
+      return null; // No effect
+  }
+};
+
+// Archive-inspired animation processing for FFmpeg
+const buildAnimationFilters = (mediaItem, animations, totalDuration) => {
+  let animationFilters = [];
+
+  // Find animations for this media item
+  const itemAnimations = animations.filter(anim => anim.targetId === mediaItem.id);
+
+  if (itemAnimations.length === 0) {
+    return '';
+  }
+
+  console.log(`Building animations for ${mediaItem.id}:`, itemAnimations.map(a => a.type));
+
+  itemAnimations.forEach(animation => {
+    switch (animation.type) {
+      case 'fadeIn':
+        // Fade in from 0 to 1 opacity over animation duration
+        const fadeInDuration = animation.duration / 1000; // Convert ms to seconds
+        const fadeInStart = mediaItem.startTime;
+        animationFilters.push(`fade=t=in:st=${fadeInStart}:d=${fadeInDuration}`);
+        console.log(`Added fadeIn: start=${fadeInStart}s, duration=${fadeInDuration}s`);
+        break;
+
+      case 'fadeOut':
+        // Fade out from 1 to 0 opacity over animation duration
+        const fadeOutDuration = animation.duration / 1000; // Convert ms to seconds
+        const fadeOutStart = mediaItem.endTime - fadeOutDuration;
+        animationFilters.push(`fade=t=out:st=${fadeOutStart}:d=${fadeOutDuration}`);
+        console.log(`Added fadeOut: start=${fadeOutStart}s, duration=${fadeOutDuration}s`);
+        break;
+
+      case 'slideIn':
+        // Slide in effect using overlay positioning (handled in overlay stage)
+        console.log(`SlideIn animation detected for ${mediaItem.id} - will be handled in overlay`);
+        break;
+
+      case 'breathe':
+        // Breathing effect using scale animation (complex, simplified for now)
+        console.log(`Breathe animation detected for ${mediaItem.id} - simplified implementation`);
+        break;
+
+      default:
+        console.log(`Unknown animation type: ${animation.type}`);
+    }
+  });
+
+  return animationFilters.length > 0 ? animationFilters.join(',') + ',' : '';
+};
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 require('dotenv').config();
 
@@ -277,8 +343,8 @@ const createBoxShadowFilter = (layer, inputLabel, outputLabel) => {
   return shadowFilters;
 };
 
-// Helper function to build video styling filters
-const buildVideoStyleFilters = (layer) => {
+// Helper function to build video styling filters with Archive-inspired effects and animations
+const buildVideoStyleFilters = (layer, animations = [], totalDuration = 0) => {
   let filters = [];
 
   console.log(`Applying video styling for layer:`, {
@@ -291,10 +357,29 @@ const buildVideoStyleFilters = (layer) => {
     boxShadow: layer.boxShadow,
     borderRadius: layer.borderRadius,
     borderWidth: layer.borderWidth,
-    borderColor: layer.borderColor
+    borderColor: layer.borderColor,
+    effect: layer.effect // Archive-inspired effect
   });
 
-  // Apply flip transformations first
+  // Apply Archive-inspired effects first
+  if (layer.effect && layer.effect.type) {
+    const effectFilter = getFFmpegEffectFilter(layer.effect.type);
+    if (effectFilter) {
+      filters.push(effectFilter);
+      console.log(`Applied Archive effect: ${layer.effect.type} -> ${effectFilter}`);
+    }
+  }
+
+  // Apply Archive-inspired animations
+  if (animations && animations.length > 0) {
+    const animationFilter = buildAnimationFilters(layer, animations, totalDuration);
+    if (animationFilter) {
+      filters.push(animationFilter.replace(/,$/, '')); // Remove trailing comma
+      console.log(`Applied animations for ${layer.id}`);
+    }
+  }
+
+  // Apply flip transformations
   if (layer.flipY) {
     filters.push('vflip');
     console.log('Applied vertical flip');
@@ -427,12 +512,22 @@ const createVideoFromProject = async (projectData, renderId) => {
         fs.mkdirSync(tempDir, { recursive: true });
       }
 
-      const { size, fps = 30, trackItemIds = [], trackItemDetailsMap = {}, trackItemsMap = {} } = projectData;
+      const {
+        size,
+        fps = 30,
+        trackItemIds = [],
+        trackItemDetailsMap = {},
+        trackItemsMap = {},
+        animations = [], // Archive-inspired animations
+        effects = [], // Archive-inspired effects
+        maxTime = 5000 // Archive-inspired max time
+      } = projectData;
       const width = size?.width || 1080;
       const height = size?.height || 1920;
 
       console.log(`Processing project with ${trackItemIds.length} track items`);
       console.log('Track item details keys:', Object.keys(trackItemDetailsMap));
+      console.log(`Archive enhancements: ${animations.length} animations, ${effects.length} effects, maxTime: ${maxTime}ms`);
 
       // Calculate total duration from track items
       let totalDuration = 5; // Default 5 seconds
@@ -534,6 +629,14 @@ const createVideoFromProject = async (projectData, renderId) => {
               console.log(`${itemType} trim detected for ${itemId}: ${trimStart}s to ${trimEnd}s (duration: ${trimDuration}s)`);
             }
 
+            // Extract Archive-inspired effect information
+            let effect = { type: 'none' };
+            if (details.effect && details.effect.type) {
+              effect = details.effect;
+            } else if (details.placement && details.placement.effect) {
+              effect = details.placement.effect;
+            }
+
             mediaItems.push({
               id: itemId,
               type: itemType,
@@ -558,7 +661,9 @@ const createVideoFromProject = async (projectData, renderId) => {
               borderRadius: details.borderRadius || 0,
               borderWidth: details.borderWidth || 0,
               borderColor: details.borderColor || '#000000',
-              volume: details.volume !== undefined ? details.volume : 100 // Video volume control
+              volume: details.volume !== undefined ? details.volume : 100, // Video volume control
+              // Archive-inspired enhancements
+              effect: effect
             });
 
             const logData = {
@@ -616,8 +721,21 @@ const createVideoFromProject = async (projectData, renderId) => {
         return;
       }
 
-      // Sort media items by start time for proper layering
-      mediaItems.sort((a, b) => a.startTime - b.startTime);
+      // Archive-inspired z-index ordering: respect trackItemIds order for layering
+      // trackItemIds defines the z-index order (first = bottom layer, last = top layer)
+      console.log('Original trackItemIds order (z-index):', trackItemIds);
+
+      // Sort media items by their position in trackItemIds array (z-index order)
+      mediaItems.sort((a, b) => {
+        const indexA = trackItemIds.indexOf(a.id);
+        const indexB = trackItemIds.indexOf(b.id);
+        return indexA - indexB; // Maintain trackItemIds order
+      });
+
+      console.log('Media items sorted by z-index order:');
+      mediaItems.forEach((item, index) => {
+        console.log(`  Z-Layer ${index}: ${item.id} (${item.type}) - ${item.startTime}s to ${item.endTime}s`);
+      });
 
       if (mediaItems.length > 1) {
         console.log('Multiple media files detected - enabling multi-layer composition');
@@ -652,8 +770,8 @@ const createVideoFromProject = async (projectData, renderId) => {
 
       console.log(`Successfully downloaded ${downloadedFiles.length} media files`);
 
-      // Create video with downloaded media files and text items
-      await createVideoWithMedia(downloadedFiles, textItems, outputPath, width, height, totalDuration, fps, renderId);
+      // Create video with downloaded media files and text items (pass trackItemIds and animations for z-index)
+      await createVideoWithMedia(downloadedFiles, textItems, outputPath, width, height, totalDuration, fps, renderId, trackItemIds, animations);
 
       // Clean up temp files
       downloadedFiles.forEach(file => {
@@ -675,8 +793,8 @@ const createVideoFromProject = async (projectData, renderId) => {
   });
 };
 
-// Enhanced function to create video with multiple overlapping media files and text items
-const createVideoWithMedia = async (mediaFiles, textItems, outputPath, width, height, duration, fps, renderId) => {
+// Enhanced function to create video with multiple overlapping media files and text items (Archive-inspired z-index support and animations)
+const createVideoWithMedia = async (mediaFiles, textItems, outputPath, width, height, duration, fps, renderId, trackItemIds = [], animations = []) => {
   return new Promise(async (resolve, reject) => {
     console.log('Creating video with multiple media files and text items...');
     console.log(`Video specs: ${width}x${height}, ${fps}fps, ${duration}s`);
@@ -725,8 +843,8 @@ const createVideoWithMedia = async (mediaFiles, textItems, outputPath, width, he
       console.log(`    Style: ${item.fontSize}px ${item.fontFamily}, ${item.color}`);
     });
 
-    // Create multi-layer video with both media and text
-    createMultiLayerVideoWithText(sortedFiles, textItems, outputPath, width, height, duration, fps, renderId)
+    // Create multi-layer video with both media and text (pass trackItemIds and animations for z-index)
+    createMultiLayerVideoWithText(sortedFiles, textItems, outputPath, width, height, duration, fps, renderId, trackItemIds, animations)
       .then(resolve)
       .catch((error) => {
         console.error('Multi-layer composition failed:', error);
@@ -862,9 +980,9 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
       if (hasTimingConstraints || hasStyleEffects) {
         console.log('Applying timing constraints and/or styling effects to single video');
 
-        // Build filter chain with styling effects
+        // Build filter chain with styling effects and animations
         let videoFilter = '[0:v]';
-        videoFilter += buildVideoStyleFilters(mediaFile);
+        videoFilter += buildVideoStyleFilters(mediaFile, animations, totalDuration * 1000);
 
         // Calculate final dimensions with transform scaling (same as multi-layer)
         let finalWidth = width;
@@ -1134,16 +1252,16 @@ const createTextOnlyVideo = async (textItems, outputPath, width, height, duratio
   });
 };
 
-// Function to create video with both media files and text overlays
-const createMultiLayerVideoWithText = async (mediaFiles, textItems, outputPath, width, height, duration, fps, renderId) => {
+// Function to create video with both media files and text overlays (Archive-inspired z-index support and animations)
+const createMultiLayerVideoWithText = async (mediaFiles, textItems, outputPath, width, height, duration, fps, renderId, trackItemIds = [], animations = []) => {
   return new Promise(async (resolve, reject) => {
     console.log(`Creating multi-layer video with ${mediaFiles.length} media files and ${textItems.length} text items...`);
 
     try {
       // Create video with media files and integrate text overlays directly
       if (mediaFiles.length > 0) {
-        // Use multi-layer video creation with integrated text support
-        await createMultiLayerVideoWithTextIntegrated(mediaFiles, textItems, outputPath, width, height, duration, fps, renderId);
+        // Use multi-layer video creation with integrated text support (pass trackItemIds and animations for z-index)
+        await createMultiLayerVideoWithTextIntegrated(mediaFiles, textItems, outputPath, width, height, duration, fps, renderId, trackItemIds, animations);
         resolve(outputPath);
       } else {
         // No media files, create text-only video
@@ -1216,8 +1334,8 @@ const addTextOverlaysToVideo = async (videoPath, textItems, width, height, durat
   });
 };
 
-// Enhanced multi-layer video creation with audio and text support
-const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, outputPath, width, height, duration, fps, renderId) => {
+// Enhanced multi-layer video creation with audio and text support (Archive-inspired z-index and animations)
+const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, outputPath, width, height, duration, fps, renderId, trackItemIds = [], animations = []) => {
   console.log(`Creating multi-layer video with ${mediaFiles.length} layers and ${textItems.length} text items...`);
 
   // Separate media types
@@ -1231,8 +1349,17 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
     throw new Error('No image or video files found for composition');
   }
 
-  // Combine image and video files as visual layers
-  const visualFiles = [...imageFiles, ...videoFiles];
+  // Archive-inspired z-index ordering: combine and sort visual layers by trackItemIds order
+  const visualFiles = [...imageFiles, ...videoFiles].sort((a, b) => {
+    const indexA = trackItemIds.indexOf(a.id);
+    const indexB = trackItemIds.indexOf(b.id);
+    return indexA - indexB; // Maintain trackItemIds order for proper z-index
+  });
+
+  console.log('Visual layers ordered by z-index:');
+  visualFiles.forEach((layer, index) => {
+    console.log(`  Visual Z-Layer ${index}: ${layer.type} ${layer.id} at ${layer.left},${layer.top}`);
+  });
 
   if (visualFiles.length === 1 && audioFiles.length === 0 && textItems.length === 0) {
     // Single visual media, no audio, no text - use simple approach
@@ -1297,9 +1424,18 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
     // Build complex filter for video, audio, and text with proper timing constraints
     const complexFilters = [];
 
-    // Scale all images
+    // Scale all images with styling effects (including opacity)
     imageFiles.forEach((layer, index) => {
-      complexFilters.push(`[${index}:v]scale=${layer.width}:${layer.height}[img${index + 1}]`);
+      let filterChain = `[${index}:v]`;
+
+      // Apply image styling effects and animations (including opacity)
+      filterChain += buildVideoStyleFilters(layer, animations, duration * 1000);
+
+      // Apply scaling
+      filterChain += `scale=${layer.width}:${layer.height}[img${index + 1}]`;
+
+      complexFilters.push(filterChain);
+      console.log(`Image ${index + 1} filter chain: ${filterChain}`);
     });
 
     // Scale all videos (with trim handling and styling effects)
@@ -1312,8 +1448,8 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
         filterChain += `trim=start=${layer.trimStart}:duration=${layer.trimDuration},setpts=PTS-STARTPTS,`;
       }
 
-      // Apply video styling effects (except box shadow)
-      filterChain += buildVideoStyleFilters(layer);
+      // Apply video styling effects and animations (except box shadow)
+      filterChain += buildVideoStyleFilters(layer, animations, duration * 1000);
 
       // Calculate final dimensions with transform scaling
       let finalWidth = layer.width;
@@ -1361,36 +1497,36 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
     // Create background
     complexFilters.push(`color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`);
 
-    // Build overlay chain - each visual layer (image/video) overlays on the previous result
+    // Archive-inspired z-index overlay chain - build layers in trackItemIds order
+    // Each layer overlays on the previous result, maintaining proper z-index
     let currentLayer = 'bg';
     let layerIndex = 0;
 
-    // Add image layers
-    imageFiles.forEach((layer, index) => {
+    // Process all visual files in their original order (already sorted by z-index)
+    visualFiles.forEach((layer, index) => {
       const left = parseInt(String(layer.left).replace('px', '')) || 0;
       const top = parseInt(String(layer.top).replace('px', '')) || 0;
       const nextLayer = layerIndex === visualFiles.length - 1 ? 'video_final' : `bg_with_layer${layerIndex + 1}`;
 
-      complexFilters.push(
-        `[${currentLayer}][img${index + 1}]overlay=${left}:${top}:enable='between(t,${layer.startTime},${layer.endTime})'[${nextLayer}]`
-      );
+      // Determine the input label based on layer type
+      let inputLabel;
+      if (layer.type === 'image') {
+        const imgIndex = imageFiles.findIndex(img => img.id === layer.id) + 1;
+        inputLabel = `img${imgIndex}`;
+      } else if (layer.type === 'video') {
+        const vidIndex = videoFiles.findIndex(vid => vid.id === layer.id) + 1;
+        inputLabel = `vid${vidIndex}`;
+      }
 
-      currentLayer = nextLayer;
-      layerIndex++;
-    });
+      if (inputLabel) {
+        complexFilters.push(
+          `[${currentLayer}][${inputLabel}]overlay=${left}:${top}:enable='between(t,${layer.startTime},${layer.endTime})'[${nextLayer}]`
+        );
 
-    // Add video layers
-    videoFiles.forEach((layer, index) => {
-      const left = parseInt(String(layer.left).replace('px', '')) || 0;
-      const top = parseInt(String(layer.top).replace('px', '')) || 0;
-      const nextLayer = layerIndex === visualFiles.length - 1 ? 'video_final' : `bg_with_layer${layerIndex + 1}`;
-
-      complexFilters.push(
-        `[${currentLayer}][vid${index + 1}]overlay=${left}:${top}:enable='between(t,${layer.startTime},${layer.endTime})'[${nextLayer}]`
-      );
-
-      currentLayer = nextLayer;
-      layerIndex++;
+        console.log(`Z-Layer ${layerIndex}: ${layer.type} ${layer.id} overlaid at ${left},${top} (${layer.startTime}s-${layer.endTime}s)`);
+        currentLayer = nextLayer;
+        layerIndex++;
+      }
     });
 
     // Add text overlays to the video
@@ -1687,9 +1823,18 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
       // Build complex filter for video and audio with proper timing constraints
       const complexFilters = [];
 
-      // Scale all images
+      // Scale all images with styling effects (including opacity)
       imageFiles.forEach((layer, index) => {
-        complexFilters.push(`[${index}:v]scale=${layer.width}:${layer.height}[img${index + 1}]`);
+        let filterChain = `[${index}:v]`;
+
+        // Apply image styling effects and animations (including opacity)
+        filterChain += buildVideoStyleFilters(layer, animations, duration * 1000);
+
+        // Apply scaling
+        filterChain += `scale=${layer.width}:${layer.height}[img${index + 1}]`;
+
+        complexFilters.push(filterChain);
+        console.log(`Image ${index + 1} filter chain: ${filterChain}`);
       });
 
       // Scale all videos (with trim handling and styling effects)
@@ -1702,8 +1847,8 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
           filterChain += `trim=start=${layer.trimStart}:duration=${layer.trimDuration},setpts=PTS-STARTPTS,`;
         }
 
-        // Apply video styling effects
-        filterChain += buildVideoStyleFilters(layer);
+        // Apply video styling effects and animations
+        filterChain += buildVideoStyleFilters(layer, animations, duration * 1000);
 
         // Calculate final dimensions with transform scaling
         let finalWidth = layer.width;

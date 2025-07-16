@@ -15,6 +15,7 @@ import { download } from "@/utils/download";
 import { debugDownload } from "@/utils/downloadDebug";
 import { quickTestDownload } from "@/utils/quickTest";
 import { API_ENDPOINTS } from "@/config/api";
+import { enhanceDesignForExport } from "@/utils/export-enhancer";
 
 
 
@@ -109,7 +110,7 @@ const DownloadPopover = () => {
   } = useStore();
 
   const handleExport = async () => {
-    const data: IDesign = {
+    const baseData: IDesign = {
       id: generateId(),
       fps,
       tracks,
@@ -121,6 +122,11 @@ const DownloadPopover = () => {
       transitionIds: []
     };
 
+    // Enhance the data structure with Archive-inspired features
+    const enhancedData = enhanceDesignForExport(baseData);
+
+    console.log('Enhanced export data:', enhancedData);
+
     try {
       // Start the render job
       const response = await fetch(API_ENDPOINTS.RENDER, {
@@ -128,7 +134,7 @@ const DownloadPopover = () => {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(data),
+        body: JSON.stringify(enhancedData),
       });
 
       if (!response.ok) {
