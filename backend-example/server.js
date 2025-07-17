@@ -637,6 +637,28 @@ const createVideoFromProject = async (projectData, renderId) => {
               effect = details.placement.effect;
             }
 
+            // Calculate actual rendered dimensions using placement scaling
+            let actualWidth = details.width || width;
+            let actualHeight = details.height || height;
+
+            // Use placement object for accurate scaling if available
+            if (details.placement && details.placement.scaleX && details.placement.scaleY) {
+              actualWidth = Math.round((details.placement.width || details.width || width) * details.placement.scaleX);
+              actualHeight = Math.round((details.placement.height || details.height || height) * details.placement.scaleY);
+              console.log(`Using placement scaling: ${details.placement.width || details.width}x${details.placement.height || details.height} * ${details.placement.scaleX},${details.placement.scaleY} = ${actualWidth}x${actualHeight}`);
+            } else if (details.transform && details.transform.includes('scale')) {
+              // Fallback to transform parsing if no placement object
+              const scaleMatch = details.transform.match(/scale\(([^)]+)\)/);
+              if (scaleMatch) {
+                const scaleValues = scaleMatch[1].split(',').map(v => parseFloat(v.trim()));
+                if (scaleValues.length >= 2) {
+                  actualWidth = Math.round(actualWidth * scaleValues[0]);
+                  actualHeight = Math.round(actualHeight * scaleValues[1]);
+                  console.log(`Using transform scaling: ${details.width}x${details.height} * ${scaleValues[0]},${scaleValues[1]} = ${actualWidth}x${actualHeight}`);
+                }
+              }
+            }
+
             mediaItems.push({
               id: itemId,
               type: itemType,
@@ -647,8 +669,10 @@ const createVideoFromProject = async (projectData, renderId) => {
               trimStart,
               trimEnd,
               trimDuration,
-              width: details.width || width,
-              height: details.height || height,
+              width: actualWidth,
+              height: actualHeight,
+              originalWidth: details.width || width, // Keep original for reference
+              originalHeight: details.height || height,
               top,
               left,
               opacity: details.opacity || 100, // Keep as percentage for easier processing
@@ -663,8 +687,38 @@ const createVideoFromProject = async (projectData, renderId) => {
               borderColor: details.borderColor || '#000000',
               volume: details.volume !== undefined ? details.volume : 100, // Video volume control
               // Archive-inspired enhancements
-              effect: effect
+              effect: effect,
+              // Store placement for reference
+              placement: details.placement || null
             });
+
+          // IMPORTANT: Convert container-center-relative positioning to FFmpeg top-left coordinates
+          // The payload contains offsets from container center, but FFmpeg overlay needs top-left coordinates
+          const lastItem = mediaItems[mediaItems.length - 1];
+          const leftOffset = parseFloat(String(details.left).replace('px', '')) || 0;
+          const topOffset = parseFloat(String(details.top).replace('px', '')) || 0;
+
+          // Calculate container center point
+          const containerCenterX = width / 2;
+          const containerCenterY = height / 2;
+
+          // Calculate item center position in absolute coordinates
+          const itemCenterX = containerCenterX + leftOffset;
+          const itemCenterY = containerCenterY + topOffset;
+
+          // Convert item center to FFmpeg top-left coordinates
+          const ffmpegX = itemCenterX - (lastItem.width / 2);
+          const ffmpegY = itemCenterY - (lastItem.height / 2);
+
+          // Update the positioning to use FFmpeg top-left coordinates
+          lastItem.left = ffmpegX;
+          lastItem.top = ffmpegY;
+
+          console.log(`Container-center-relative positioning conversion:`);
+          console.log(`  Container center: (${containerCenterX}, ${containerCenterY})`);
+          console.log(`  Offset from center: (${leftOffset}, ${topOffset})`);
+          console.log(`  Item center: (${itemCenterX}, ${itemCenterY})`);
+          console.log(`  FFmpeg top-left: (${ffmpegX}, ${ffmpegY}) for ${lastItem.width}x${lastItem.height} item`);
 
             const logData = {
               type: itemType,
@@ -873,6 +927,7 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
     if (mediaFile.type === 'image') {
       console.log(`Creating video from single image: ${mediaFile.localPath}`);
       console.log(`Image timing: ${mediaFile.startTime}s to ${mediaFile.endTime}s (duration: ${mediaFile.duration}s)`);
+      console.log(`DEBUG: mediaFile dimensions: ${mediaFile.width}x${mediaFile.height}`);
 
       // Check if image has timing constraints or positioning
       const left = parseInt(String(mediaFile.left).replace('px', '')) || 0;
@@ -884,14 +939,62 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
         console.log('Applying timing constraints and/or positioning to single image');
         console.log(`Image positioning: left=${left}, top=${top}`);
 
-        // Use complex filter to apply timing constraints and positioning
-        const complexFilters = [
-          `[0:v]scale=${width}:${height}[img_scaled]`,
-          `color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`,
-          hasTimingConstraints
-            ? `[bg][img_scaled]overlay=${left}:${top}:enable='between(t,${mediaFile.startTime},${mediaFile.endTime})'[final]`
-            : `[bg][img_scaled]overlay=${left}:${top}[final]`
-        ];
+        // Simpler approach: Create larger background and place image at adjusted coordinates
+        if (left < 0 || top < 0) {
+          // Calculate padding needed for negative positioning
+          const padLeft = Math.max(0, -left);
+          const padTop = Math.max(0, -top);
+          const padRight = Math.max(0, (left + mediaFile.width) - width);
+          const padBottom = Math.max(0, (top + mediaFile.height) - height);
+
+          // Calculate expanded canvas size
+          const expandedWidth = width + padLeft + padRight;
+          const expandedHeight = height + padTop + padBottom;
+
+          // Adjust coordinates to account for padding
+          const adjustedLeft = left + padLeft;
+          const adjustedTop = top + padTop;
+
+          console.log(`Single image negative positioning: (${left}, ${top}) -> (${adjustedLeft}, ${adjustedTop}) with expanded canvas ${expandedWidth}x${expandedHeight}`);
+
+          // Create expanded background and place image at adjusted coordinates
+          const backgroundFilter = `color=black:size=${expandedWidth}x${expandedHeight}:duration=${duration}:rate=${fps}[bg_expanded]`;
+
+          let overlayFilter;
+          if (hasTimingConstraints) {
+            overlayFilter = `[bg_expanded][img_scaled]overlay=${adjustedLeft}:${adjustedTop}:enable='between(t,${mediaFile.startTime},${mediaFile.endTime})'[video_before_crop]`;
+          } else {
+            overlayFilter = `[bg_expanded][img_scaled]overlay=${adjustedLeft}:${adjustedTop}[video_before_crop]`;
+          }
+
+          // Crop back to original canvas size
+          const cropFilter = `[video_before_crop]crop=${width}:${height}:${padLeft}:${padTop}[final]`;
+
+          complexFilters = [
+            `[0:v]scale=${mediaFile.width}:${mediaFile.height}[img_scaled]`,
+            backgroundFilter,
+            overlayFilter,
+            cropFilter
+          ];
+        } else {
+          // Positive positioning - use normal approach
+          console.log(`Single image positive positioning: (${left}, ${top})`);
+
+          const backgroundFilter = `color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`;
+
+          let overlayFilter;
+          if (hasTimingConstraints) {
+            overlayFilter = `[bg][img_scaled]overlay=${left}:${top}:enable='between(t,${mediaFile.startTime},${mediaFile.endTime})'[final]`;
+          } else {
+            overlayFilter = `[bg][img_scaled]overlay=${left}:${top}[final]`;
+          }
+
+          complexFilters = [
+            `[0:v]scale=${mediaFile.width}:${mediaFile.height}[img_scaled]`,
+            backgroundFilter,
+            overlayFilter
+          ];
+        }
 
         ffmpeg()
           .input(mediaFile.localPath)
@@ -984,26 +1087,13 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
         let videoFilter = '[0:v]';
         videoFilter += buildVideoStyleFilters(mediaFile, animations, totalDuration * 1000);
 
-        // Calculate final dimensions with transform scaling (same as multi-layer)
-        let finalWidth = width;
-        let finalHeight = height;
+        // Use pre-calculated dimensions from mediaFile (scaling already applied during parsing)
+        let finalWidth = mediaFile.width;
+        let finalHeight = mediaFile.height;
 
-        // Extract scale from transform if present
-        if (mediaFile.transform && mediaFile.transform.includes('scale')) {
-          const scaleMatch = mediaFile.transform.match(/scale\(([^)]+)\)/);
-          if (scaleMatch) {
-            const scaleValues = scaleMatch[1].split(',').map(v => parseFloat(v.trim()));
-            if (scaleValues.length >= 2) {
-              finalWidth = Math.round(width * scaleValues[0]);
-              finalHeight = Math.round(height * scaleValues[1]);
-              console.log(`Applied transform scaling: ${width}x${height} -> ${finalWidth}x${finalHeight}`);
-            } else if (scaleValues.length === 1) {
-              // Single scale value applies to both dimensions
-              finalWidth = Math.round(width * scaleValues[0]);
-              finalHeight = Math.round(height * scaleValues[0]);
-              console.log(`Applied uniform transform scaling: ${width}x${height} -> ${finalWidth}x${finalHeight}`);
-            }
-          }
+        // Log the dimensions being used (scaling was already applied during parsing)
+        if (mediaFile.placement || (mediaFile.transform && mediaFile.transform.includes('scale'))) {
+          console.log(`Using pre-calculated scaled dimensions: ${finalWidth}x${finalHeight} (scaling applied during parsing)`);
         }
 
         // Ensure dimensions are even numbers and have minimum size for FFmpeg compatibility
@@ -1025,19 +1115,67 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
           const left = parseInt(String(mediaFile.left).replace('px', '')) || 0;
           const top = parseInt(String(mediaFile.top).replace('px', '')) || 0;
 
-          complexFilters.push(`color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`);
-          complexFilters.push(`[bg][vid_styled]overlay=${left}:${top}:enable='between(t,${mediaFile.startTime},${mediaFile.endTime})'[final]`);
-          console.log(`Applied video positioning: left=${left}, top=${top}`);
+          // Calculate padding needed for negative positioning
+          const padLeft = Math.max(0, -left);
+          const padTop = Math.max(0, -top);
+          const padRight = Math.max(0, (left + finalWidth) - width);
+          const padBottom = Math.max(0, (top + finalHeight) - height);
+
+          // Calculate expanded canvas size
+          const expandedWidth = width + padLeft + padRight;
+          const expandedHeight = height + padTop + padBottom;
+
+          // Adjust coordinates to account for padding
+          const adjustedLeft = left + padLeft;
+          const adjustedTop = top + padTop;
+
+          complexFilters.push(`color=black:size=${expandedWidth}x${expandedHeight}:duration=${duration}:rate=${fps}[bg_expanded]`);
+          complexFilters.push(`[bg_expanded][vid_styled]overlay=${adjustedLeft}:${adjustedTop}:enable='between(t,${mediaFile.startTime},${mediaFile.endTime})'[video_before_crop]`);
+
+          // Add crop step to return to original canvas size if padding was applied
+          if (padLeft > 0 || padTop > 0 || padRight > 0 || padBottom > 0) {
+            complexFilters.push(`[video_before_crop]crop=${width}:${height}:${padLeft}:${padTop}[final]`);
+            console.log(`Applied crop to return to original canvas size: crop=${width}:${height}:${padLeft}:${padTop}`);
+          } else {
+            // No padding was applied, just copy the layer
+            complexFilters.push(`[video_before_crop]copy[final]`);
+          }
+
+          console.log(`Applied video positioning: (${left}, ${top}) -> (${adjustedLeft}, ${adjustedTop})`);
         } else {
           // Even without timing constraints, we might need positioning
           const left = parseInt(String(mediaFile.left).replace('px', '')) || 0;
           const top = parseInt(String(mediaFile.top).replace('px', '')) || 0;
 
           if (left !== 0 || top !== 0) {
-            // Need positioning, create background and overlay
-            complexFilters.push(`color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`);
-            complexFilters.push(`[bg][vid_styled]overlay=${left}:${top}[final]`);
-            console.log(`Applied video positioning (no timing): left=${left}, top=${top}`);
+            // Need positioning, create background and overlay with padding support
+            // Calculate padding needed for negative positioning
+            const padLeft = Math.max(0, -left);
+            const padTop = Math.max(0, -top);
+            const padRight = Math.max(0, (left + finalWidth) - width);
+            const padBottom = Math.max(0, (top + finalHeight) - height);
+
+            // Calculate expanded canvas size
+            const expandedWidth = width + padLeft + padRight;
+            const expandedHeight = height + padTop + padBottom;
+
+            // Adjust coordinates to account for padding
+            const adjustedLeft = left + padLeft;
+            const adjustedTop = top + padTop;
+
+            complexFilters.push(`color=black:size=${expandedWidth}x${expandedHeight}:duration=${duration}:rate=${fps}[bg_expanded]`);
+            complexFilters.push(`[bg_expanded][vid_styled]overlay=${adjustedLeft}:${adjustedTop}[video_before_crop]`);
+
+            // Add crop step to return to original canvas size if padding was applied
+            if (padLeft > 0 || padTop > 0 || padRight > 0 || padBottom > 0) {
+              complexFilters.push(`[video_before_crop]crop=${width}:${height}:${padLeft}:${padTop}[final]`);
+              console.log(`Applied crop to return to original canvas size: crop=${width}:${height}:${padLeft}:${padTop}`);
+            } else {
+              // No padding was applied, just copy the layer
+              complexFilters.push(`[video_before_crop]copy[final]`);
+            }
+
+            console.log(`Applied video positioning (no timing): (${left}, ${top}) -> (${adjustedLeft}, ${adjustedTop})`);
           } else {
             // No positioning needed
             complexFilters.push(`[vid_styled]copy[final]`);
@@ -1451,26 +1589,13 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
       // Apply video styling effects and animations (except box shadow)
       filterChain += buildVideoStyleFilters(layer, animations, duration * 1000);
 
-      // Calculate final dimensions with transform scaling
+      // Use pre-calculated dimensions (scaling already applied during parsing)
       let finalWidth = layer.width;
       let finalHeight = layer.height;
 
-      // Extract scale from transform if present
-      if (layer.transform && layer.transform.includes('scale')) {
-        const scaleMatch = layer.transform.match(/scale\(([^)]+)\)/);
-        if (scaleMatch) {
-          const scaleValues = scaleMatch[1].split(',').map(v => parseFloat(v.trim()));
-          if (scaleValues.length >= 2) {
-            finalWidth = Math.round(layer.width * scaleValues[0]);
-            finalHeight = Math.round(layer.height * scaleValues[1]);
-            console.log(`Applied transform scaling: ${layer.width}x${layer.height} -> ${finalWidth}x${finalHeight}`);
-          } else if (scaleValues.length === 1) {
-            // Single scale value applies to both dimensions
-            finalWidth = Math.round(layer.width * scaleValues[0]);
-            finalHeight = Math.round(layer.height * scaleValues[0]);
-            console.log(`Applied uniform transform scaling: ${layer.width}x${layer.height} -> ${finalWidth}x${finalHeight}`);
-          }
-        }
+      // Log the dimensions being used (scaling was already applied during parsing)
+      if (layer.placement || (layer.transform && layer.transform.includes('scale'))) {
+        console.log(`Using pre-calculated scaled dimensions: ${finalWidth}x${finalHeight} (scaling applied during parsing)`);
       }
 
       // Scale first, then handle box shadow if present
@@ -1494,19 +1619,57 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
       }
     });
 
-    // Create background
-    complexFilters.push(`color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`);
+    // Calculate canvas padding needed for negative positioning
+    let minX = 0, minY = 0, maxX = width, maxY = height;
+
+    visualFiles.forEach(layer => {
+      const layerLeft = parseInt(String(layer.left).replace('px', '')) || 0;
+      const layerTop = parseInt(String(layer.top).replace('px', '')) || 0;
+      const layerRight = layerLeft + layer.width;
+      const layerBottom = layerTop + layer.height;
+
+      minX = Math.min(minX, layerLeft);
+      minY = Math.min(minY, layerTop);
+      maxX = Math.max(maxX, layerRight);
+      maxY = Math.max(maxY, layerBottom);
+    });
+
+    // Calculate padding needed
+    const padLeft = Math.max(0, -minX);
+    const padTop = Math.max(0, -minY);
+    const padRight = Math.max(0, maxX - width);
+    const padBottom = Math.max(0, maxY - height);
+
+    // Calculate expanded canvas size
+    const expandedWidth = width + padLeft + padRight;
+    const expandedHeight = height + padTop + padBottom;
+
+    console.log(`Canvas padding: left=${padLeft}, top=${padTop}, right=${padRight}, bottom=${padBottom}`);
+    console.log(`Expanded canvas: ${expandedWidth}x${expandedHeight} (original: ${width}x${height})`);
+
+    // Create expanded background canvas
+    complexFilters.push(`color=black:size=${expandedWidth}x${expandedHeight}:duration=${duration}:rate=${fps}[bg_expanded]`);
+
+    // If padding was needed, crop back to original size at the end
+    const needsPadding = padLeft > 0 || padTop > 0 || padRight > 0 || padBottom > 0;
 
     // Archive-inspired z-index overlay chain - build layers in trackItemIds order
     // Each layer overlays on the previous result, maintaining proper z-index
-    let currentLayer = 'bg';
+    let currentLayer = 'bg_expanded';
     let layerIndex = 0;
 
     // Process all visual files in their original order (already sorted by z-index)
-    visualFiles.forEach((layer, index) => {
-      const left = parseInt(String(layer.left).replace('px', '')) || 0;
-      const top = parseInt(String(layer.top).replace('px', '')) || 0;
-      const nextLayer = layerIndex === visualFiles.length - 1 ? 'video_final' : `bg_with_layer${layerIndex + 1}`;
+    visualFiles.forEach((layer) => {
+      const originalLeft = parseInt(String(layer.left).replace('px', '')) || 0;
+      const originalTop = parseInt(String(layer.top).replace('px', '')) || 0;
+
+      // Adjust coordinates to account for padding (convert negative coords to positive)
+      const adjustedLeft = originalLeft + padLeft;
+      const adjustedTop = originalTop + padTop;
+
+      console.log(`Layer ${layer.id}: original position (${originalLeft}, ${originalTop}) -> adjusted position (${adjustedLeft}, ${adjustedTop})`);
+
+      const nextLayer = layerIndex === visualFiles.length - 1 ? 'video_before_crop' : `bg_with_layer${layerIndex + 1}`;
 
       // Determine the input label based on layer type
       let inputLabel;
@@ -1520,14 +1683,23 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
 
       if (inputLabel) {
         complexFilters.push(
-          `[${currentLayer}][${inputLabel}]overlay=${left}:${top}:enable='between(t,${layer.startTime},${layer.endTime})'[${nextLayer}]`
+          `[${currentLayer}][${inputLabel}]overlay=${adjustedLeft}:${adjustedTop}:enable='between(t,${layer.startTime},${layer.endTime})'[${nextLayer}]`
         );
 
-        console.log(`Z-Layer ${layerIndex}: ${layer.type} ${layer.id} overlaid at ${left},${top} (${layer.startTime}s-${layer.endTime}s)`);
+        console.log(`Z-Layer ${layerIndex}: ${layer.type} ${layer.id} overlaid at ${adjustedLeft},${adjustedTop} (adjusted from ${originalLeft},${originalTop}) (${layer.startTime}s-${layer.endTime}s)`);
         currentLayer = nextLayer;
         layerIndex++;
       }
     });
+
+    // Add crop step to return to original canvas size if padding was applied
+    if (padLeft > 0 || padTop > 0 || padRight > 0 || padBottom > 0) {
+      complexFilters.push(`[video_before_crop]crop=${width}:${height}:${padLeft}:${padTop}[video_final]`);
+      console.log(`Applied crop to return to original canvas size: crop=${width}:${height}:${padLeft}:${padTop}`);
+    } else {
+      // No padding was applied, just copy the layer
+      complexFilters.push(`[video_before_crop]copy[video_final]`);
+    }
 
     // Add text overlays to the video
     if (textItems.length > 0) {
@@ -1964,26 +2136,13 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
         // Apply video styling effects and animations
         filterChain += buildVideoStyleFilters(layer, animations, duration * 1000);
 
-        // Calculate final dimensions with transform scaling
+        // Use pre-calculated dimensions (scaling already applied during parsing)
         let finalWidth = layer.width;
         let finalHeight = layer.height;
 
-        // Extract scale from transform if present
-        if (layer.transform && layer.transform.includes('scale')) {
-          const scaleMatch = layer.transform.match(/scale\(([^)]+)\)/);
-          if (scaleMatch) {
-            const scaleValues = scaleMatch[1].split(',').map(v => parseFloat(v.trim()));
-            if (scaleValues.length >= 2) {
-              finalWidth = Math.round(layer.width * scaleValues[0]);
-              finalHeight = Math.round(layer.height * scaleValues[1]);
-              console.log(`Applied transform scaling: ${layer.width}x${layer.height} -> ${finalWidth}x${finalHeight}`);
-            } else if (scaleValues.length === 1) {
-              // Single scale value applies to both dimensions
-              finalWidth = Math.round(layer.width * scaleValues[0]);
-              finalHeight = Math.round(layer.height * scaleValues[0]);
-              console.log(`Applied uniform transform scaling: ${layer.width}x${layer.height} -> ${finalWidth}x${finalHeight}`);
-            }
-          }
+        // Log the dimensions being used (scaling was already applied during parsing)
+        if (layer.placement || (layer.transform && layer.transform.includes('scale'))) {
+          console.log(`Using pre-calculated scaled dimensions: ${finalWidth}x${finalHeight} (scaling applied during parsing)`);
         }
 
         // Final scale
@@ -1992,40 +2151,89 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
         complexFilters.push(filterChain);
       });
 
-      // Create background
-      complexFilters.push(`color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`);
+      // Calculate canvas padding needed for negative positioning
+      let minX = 0, minY = 0, maxX = width, maxY = height;
+
+      [...imageFiles, ...videoFiles].forEach(layer => {
+        const layerLeft = parseInt(String(layer.left).replace('px', '')) || 0;
+        const layerTop = parseInt(String(layer.top).replace('px', '')) || 0;
+        const layerRight = layerLeft + layer.width;
+        const layerBottom = layerTop + layer.height;
+
+        minX = Math.min(minX, layerLeft);
+        minY = Math.min(minY, layerTop);
+        maxX = Math.max(maxX, layerRight);
+        maxY = Math.max(maxY, layerBottom);
+      });
+
+      // Calculate padding needed
+      const padLeft = Math.max(0, -minX);
+      const padTop = Math.max(0, -minY);
+      const padRight = Math.max(0, maxX - width);
+      const padBottom = Math.max(0, maxY - height);
+
+      // Calculate expanded canvas size
+      const expandedWidth = width + padLeft + padRight;
+      const expandedHeight = height + padTop + padBottom;
+
+      console.log(`Canvas padding: left=${padLeft}, top=${padTop}, right=${padRight}, bottom=${padBottom}`);
+      console.log(`Expanded canvas: ${expandedWidth}x${expandedHeight} (original: ${width}x${height})`);
+
+      // Create expanded background canvas
+      complexFilters.push(`color=black:size=${expandedWidth}x${expandedHeight}:duration=${duration}:rate=${fps}[bg_expanded]`);
 
       // Build overlay chain - each visual layer (image/video) overlays on the previous result
-      let currentLayer = 'bg';
+      let currentLayer = 'bg_expanded';
       let layerIndex = 0;
 
       // Add image layers
       imageFiles.forEach((layer, index) => {
-        const left = parseInt(String(layer.left).replace('px', '')) || 0;
-        const top = parseInt(String(layer.top).replace('px', '')) || 0;
-        const nextLayer = layerIndex === visualFiles.length - 1 ? 'final' : `bg_with_layer${layerIndex + 1}`;
+        const originalLeft = parseInt(String(layer.left).replace('px', '')) || 0;
+        const originalTop = parseInt(String(layer.top).replace('px', '')) || 0;
+
+        // Adjust coordinates to account for padding
+        const adjustedLeft = originalLeft + padLeft;
+        const adjustedTop = originalTop + padTop;
+
+        const nextLayer = layerIndex === visualFiles.length - 1 ? 'video_before_crop' : `bg_with_layer${layerIndex + 1}`;
 
         complexFilters.push(
-          `[${currentLayer}][img${index + 1}]overlay=${left}:${top}:enable='between(t,${layer.startTime},${layer.endTime})'[${nextLayer}]`
+          `[${currentLayer}][img${index + 1}]overlay=${adjustedLeft}:${adjustedTop}:enable='between(t,${layer.startTime},${layer.endTime})'[${nextLayer}]`
         );
 
+        console.log(`Image layer ${index + 1}: position (${originalLeft}, ${originalTop}) -> adjusted (${adjustedLeft}, ${adjustedTop})`);
         currentLayer = nextLayer;
         layerIndex++;
       });
 
       // Add video layers
       videoFiles.forEach((layer, index) => {
-        const left = parseInt(String(layer.left).replace('px', '')) || 0;
-        const top = parseInt(String(layer.top).replace('px', '')) || 0;
-        const nextLayer = layerIndex === visualFiles.length - 1 ? 'final' : `bg_with_layer${layerIndex + 1}`;
+        const originalLeft = parseInt(String(layer.left).replace('px', '')) || 0;
+        const originalTop = parseInt(String(layer.top).replace('px', '')) || 0;
+
+        // Adjust coordinates to account for padding
+        const adjustedLeft = originalLeft + padLeft;
+        const adjustedTop = originalTop + padTop;
+
+        const nextLayer = layerIndex === visualFiles.length - 1 ? 'video_before_crop' : `bg_with_layer${layerIndex + 1}`;
 
         complexFilters.push(
-          `[${currentLayer}][vid${index + 1}]overlay=${left}:${top}:enable='between(t,${layer.startTime},${layer.endTime})'[${nextLayer}]`
+          `[${currentLayer}][vid${index + 1}]overlay=${adjustedLeft}:${adjustedTop}:enable='between(t,${layer.startTime},${layer.endTime})'[${nextLayer}]`
         );
 
+        console.log(`Video layer ${index + 1}: position (${originalLeft}, ${originalTop}) -> adjusted (${adjustedLeft}, ${adjustedTop})`);
         currentLayer = nextLayer;
         layerIndex++;
       });
+
+      // Add crop step to return to original canvas size if padding was applied
+      if (padLeft > 0 || padTop > 0 || padRight > 0 || padBottom > 0) {
+        complexFilters.push(`[video_before_crop]crop=${width}:${height}:${padLeft}:${padTop}[final]`);
+        console.log(`Applied crop to return to original canvas size: crop=${width}:${height}:${padLeft}:${padTop}`);
+      } else {
+        // No padding was applied, just copy the layer
+        complexFilters.push(`[video_before_crop]copy[final]`);
+      }
 
       // Add audio timing filters for all audio tracks
       if (audioFiles.length > 0) {
@@ -2148,8 +2356,8 @@ const createVideoWithAudio = async (imageFile, audioFile, outputPath, width, hei
 
     // Build complex filter for image and audio timing
     const complexFilters = [
-      // Scale image to fit canvas
-      `[0:v]scale=${width}:${height}[img_scaled]`
+      // Scale image using actual media dimensions (not canvas dimensions)
+      `[0:v]scale=${imageFile.width}:${imageFile.height}[img_scaled]`
     ];
 
     // Build audio filter based on whether trim information is available
