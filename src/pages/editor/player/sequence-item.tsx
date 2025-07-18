@@ -10,6 +10,75 @@ import {
   IVideo
 } from "@designcombo/types";
 
+// Debug overlay component to show position and scale information
+const DebugOverlay = ({ item }: { item: IItem }) => {
+  const { details } = item;
+
+  // Extract scale from transform if present
+  const getScaleFromTransform = (transform?: string) => {
+    if (!transform) return { scaleX: 1, scaleY: 1 };
+
+    const scaleMatch = transform.match(/scale\(([^)]+)\)/);
+    if (scaleMatch) {
+      const values = scaleMatch[1].split(',').map(v => parseFloat(v.trim()));
+      return {
+        scaleX: values[0] || 1,
+        scaleY: values[1] || values[0] || 1
+      };
+    }
+
+    const scaleXMatch = transform.match(/scaleX\(([^)]+)\)/);
+    const scaleYMatch = transform.match(/scaleY\(([^)]+)\)/);
+
+    return {
+      scaleX: scaleXMatch ? parseFloat(scaleXMatch[1]) : 1,
+      scaleY: scaleYMatch ? parseFloat(scaleYMatch[1]) : 1
+    };
+  };
+
+  const { scaleX, scaleY } = getScaleFromTransform(details.transform);
+  const left = parseFloat(String(details.left || 0).replace('px', ''));
+  const top = parseFloat(String(details.top || 0).replace('px', ''));
+
+  // Console log the debug information
+  const itemName = (details as any).text || (details as any).src || item.type;
+  console.log(`DEBUG [${item.type}] ${itemName}:`, {
+    id: item.id,
+    left,
+    top,
+    scaleX,
+    scaleY,
+    transform: details.transform,
+    width: details.width,
+    height: details.height
+  });
+
+  console.log('DebugOverlay rendering for item:', item.id, item.type);
+
+  return (
+    <div
+      style={{
+        position: 'absolute',
+        top: -40,
+        left: 0,
+        background: 'rgba(255, 0, 0, 0.9)',
+        color: 'white',
+        padding: '6px 10px',
+        fontSize: '14px',
+        fontFamily: 'monospace',
+        borderRadius: '6px',
+        zIndex: 9999,
+        whiteSpace: 'nowrap',
+        pointerEvents: 'none',
+        border: '2px solid red',
+        fontWeight: 'bold'
+      }}
+    >
+      [{item.type}] x: {left.toFixed(1)} | y: {top.toFixed(1)} | scale: {scaleX.toFixed(2)}×{scaleY.toFixed(2)}
+    </div>
+  );
+};
+
 const REMOTION_SAFE_FRAME = 0;
 
 interface SequenceItemOptions {
@@ -70,6 +139,7 @@ export const SequenceItem: Record<
           textTransform: details.textTransform || "none"
         }}
       >
+        <DebugOverlay item={item} />
         <TextLayer
           key={id}
           id={id}
@@ -194,6 +264,7 @@ export const SequenceItem: Record<
             filter: `brightness(${details.brightness}%) blur(${details.blur}px)`
           }}
         >
+          <DebugOverlay item={item} />
           <div
             style={{
               width: item.details.width || "100%", // Default width
@@ -285,6 +356,7 @@ export const SequenceItem: Record<
             filter: `brightness(${details.brightness}%) blur(${details.blur}px)`
           }}
         >
+          <DebugOverlay item={item} />
           <div
             style={{
               width: item.details.width || "100%", // Default width

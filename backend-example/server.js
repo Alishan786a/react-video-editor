@@ -343,6 +343,80 @@ const createBoxShadowFilter = (layer, inputLabel, outputLabel) => {
   return shadowFilters;
 };
 
+// Helper function to convert editor coordinates to video coordinates
+const convertEditorToVideoCoords = (editorLeft, editorTop, details, originalWidth, originalHeight, canvasWidth = 1080, canvasHeight = 1920) => {
+  // Extract scale information
+  let scale = 1;
+  if (details.placement && details.placement.scaleX) {
+    scale = details.placement.scaleX; // Assuming uniform scaling
+  } else if (details.transform && details.transform.includes('scale')) {
+    const scaleMatch = details.transform.match(/scale\(([^)]+)\)/);
+    if (scaleMatch) {
+      const scaleValues = scaleMatch[1].split(',').map(v => parseFloat(v.trim()));
+      scale = scaleValues[0] || 1;
+    }
+  }
+
+  // CORRECT FORMULA: Convert editor position to render coordinates
+  // The editor position represents offset from the centered position
+
+  // Calculate scaled dimensions
+  const scaledWidth = originalWidth * scale;
+  const scaledHeight = originalHeight * scale;
+
+  // Convert editor coordinates to output coordinates - corrected scale-aware approach
+  // Key insight: The editor coordinates are relative to a coordinate system where:
+  // - At scale=1, putting item at top-left gives left=0, top=0
+  // - At other scales, we need both centering offset AND a base coordinate transformation
+
+  // Calculate where the scaled image should be centered in the canvas
+  const leftCenterOffset = (canvasWidth - scaledWidth) / 2;
+  const topCenterOffset = (canvasHeight - scaledHeight) / 2;
+
+  // The missing piece: there's a base offset that represents the difference between
+  // the editor's coordinate system and the canvas coordinate system
+  // This is the offset needed when the image is at scale=1
+  const baseLeftOffset = (originalWidth - canvasWidth) / 2;  // 100 for 1280→1080
+
+  // Final formula: editor coordinates + centering offset + base coordinate system offset
+  const renderLeft = editorLeft + leftCenterOffset + baseLeftOffset;
+  const renderTop = editorTop + topCenterOffset;
+
+  console.log(`Normalized position: editor(${editorLeft}, ${editorTop}) scale(${scale}) -> original(${originalWidth}x${originalHeight}) -> scaled(${scaledWidth}x${scaledHeight}) -> normalized(${renderLeft}, ${renderTop})`);
+
+  // Validate coordinates to prevent FFmpeg errors
+  if (isNaN(renderLeft) || isNaN(renderTop) || !isFinite(renderLeft) || !isFinite(renderTop)) {
+    console.error(`ERROR: Invalid coordinates generated - left: ${renderLeft}, top: ${renderTop}`);
+    console.error(`Input values - editorLeft: ${editorLeft}, editorTop: ${editorTop}, scale: ${scale}`);
+    console.error(`Original size: ${originalWidth}x${originalHeight}, Canvas: ${canvasWidth}x${canvasHeight}`);
+  }
+
+  // Clamp coordinates to prevent FFmpeg errors
+  // Allow some negative values but prevent extreme cases
+  const clampedLeft = Math.max(-scaledWidth, Math.min(canvasWidth, renderLeft));
+  const clampedTop = Math.max(-scaledHeight, Math.min(canvasHeight, renderTop));
+
+  // Round to integers for FFmpeg compatibility
+  const finalLeft = Math.round(clampedLeft);
+  const finalTop = Math.round(clampedTop);
+
+  if (clampedLeft !== renderLeft || clampedTop !== renderTop) {
+    console.log(`Coordinates clamped: (${renderLeft}, ${renderTop}) -> (${clampedLeft}, ${clampedTop})`);
+  }
+
+  if (finalLeft !== clampedLeft || finalTop !== clampedTop) {
+    console.log(`Coordinates rounded: (${clampedLeft}, ${clampedTop}) -> (${finalLeft}, ${finalTop})`);
+  }
+
+  return {
+    left: finalLeft,
+    top: finalTop,
+    width: Math.round(scaledWidth),
+    height: Math.round(scaledHeight),
+    scale: scale
+  };
+};
+
 // Helper function to build video styling filters with Archive-inspired effects and animations
 const buildVideoStyleFilters = (layer, animations = [], totalDuration = 0) => {
   let filters = [];
@@ -567,8 +641,10 @@ const createVideoFromProject = async (projectData, renderId) => {
           const duration = endTime - startTime;
 
           // Extract positioning (handle both string and number formats)
+          console.log(`DEBUG original details.left: "${details.left}", details.top: "${details.top}"`);
           const top = parseInt(String(details.top || '0').replace('px', '')) || 0;
           const left = parseInt(String(details.left || '0').replace('px', '')) || 0;
+          console.log(`DEBUG processed left: ${left}, top: ${top}`);
 
           if (itemType === 'text') {
             // Handle text items
@@ -675,6 +751,9 @@ const createVideoFromProject = async (projectData, renderId) => {
               originalHeight: details.height || height,
               top,
               left,
+              // Store original editor values for coordinate conversion
+              editorLeft: details.left, // Original string value like "-100px"
+              editorTop: details.top,   // Original string value like "0px"
               opacity: details.opacity || 100, // Keep as percentage for easier processing
               transform: details.transform || 'none',
               blur: details.blur || 0,
@@ -692,33 +771,35 @@ const createVideoFromProject = async (projectData, renderId) => {
               placement: details.placement || null
             });
 
-          // IMPORTANT: Convert container-center-relative positioning to FFmpeg top-left coordinates
-          // The payload contains offsets from container center, but FFmpeg overlay needs top-left coordinates
+          // IMPORTANT: Convert editor coordinates to render coordinates
+          // Use the correct formula that respects editor position values
           const lastItem = mediaItems[mediaItems.length - 1];
-          const leftOffset = parseFloat(String(details.left).replace('px', '')) || 0;
-          const topOffset = parseFloat(String(details.top).replace('px', '')) || 0;
+          const editorLeft = parseFloat(String(lastItem.editorLeft || '0').replace('px', '')) || 0;
+          const editorTop = parseFloat(String(lastItem.editorTop || '0').replace('px', '')) || 0;
+          console.log(`editor positions original 6: ${editorLeft} (${editorTop})`);
+          console.log(`DEBUG lastItem.editorLeft: "${lastItem.editorLeft}", lastItem.editorTop: "${lastItem.editorTop}"`);
+          // Convert editor coordinates to video coordinates
+          const renderCoords = convertEditorToVideoCoords(
+            editorLeft,
+            editorTop,
+            details,
+            details.width || width,
+            details.height || height,
+            width,
+            height
+          );
 
-          // Calculate container center point
-          const containerCenterX = width / 2;
-          const containerCenterY = height / 2;
+          // Update the positioning to use render coordinates
+          lastItem.left = renderCoords.left;
+          lastItem.top = renderCoords.top;
+          lastItem.width = renderCoords.width;
+          lastItem.height = renderCoords.height;
 
-          // Calculate item center position in absolute coordinates
-          const itemCenterX = containerCenterX + leftOffset;
-          const itemCenterY = containerCenterY + topOffset;
-
-          // Convert item center to FFmpeg top-left coordinates
-          const ffmpegX = itemCenterX - (lastItem.width / 2);
-          const ffmpegY = itemCenterY - (lastItem.height / 2);
-
-          // Update the positioning to use FFmpeg top-left coordinates
-          lastItem.left = ffmpegX;
-          lastItem.top = ffmpegY;
-
-          console.log(`Container-center-relative positioning conversion:`);
-          console.log(`  Container center: (${containerCenterX}, ${containerCenterY})`);
-          console.log(`  Offset from center: (${leftOffset}, ${topOffset})`);
-          console.log(`  Item center: (${itemCenterX}, ${itemCenterY})`);
-          console.log(`  FFmpeg top-left: (${ffmpegX}, ${ffmpegY}) for ${lastItem.width}x${lastItem.height} item`);
+          console.log(`Editor to render coordinate conversion:`);
+          console.log(`  Editor position: (${editorLeft}, ${editorTop})`);
+          console.log(`  Original size: ${details.width || width}x${details.height || height}`);
+          console.log(`  Scale: ${renderCoords.scale}`);
+          console.log(`  Render position: (${lastItem.left}, ${lastItem.top}) for ${lastItem.width}x${lastItem.height} item`);
 
             const logData = {
               type: itemType,
@@ -929,15 +1010,30 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
       console.log(`Image timing: ${mediaFile.startTime}s to ${mediaFile.endTime}s (duration: ${mediaFile.duration}s)`);
       console.log(`DEBUG: mediaFile dimensions: ${mediaFile.width}x${mediaFile.height}`);
 
-      // Check if image has timing constraints or positioning
-      const left = parseInt(String(mediaFile.left).replace('px', '')) || 0;
-      const top = parseInt(String(mediaFile.top).replace('px', '')) || 0;
+      // Convert editor coordinates to render coordinates using original values
+      const editorLeft = parseFloat(String(mediaFile.editorLeft || '0').replace('px', '')) || 0;
+      const editorTop = parseFloat(String(mediaFile.editorTop || '0').replace('px', '')) || 0;
+      console.log(`editor positions original 5: ${editorLeft} (${editorTop})`);
+      console.log(`DEBUG mediaFile.editorLeft: "${mediaFile.editorLeft}", mediaFile.editorTop: "${mediaFile.editorTop}"`);
+      console.log(`DEBUG mediaFile.left: "${mediaFile.left}", mediaFile.top: "${mediaFile.top}"`);
+      const renderCoords = convertEditorToVideoCoords(
+        editorLeft,
+        editorTop,
+        mediaFile,
+        mediaFile.originalWidth || mediaFile.width,
+        mediaFile.originalHeight || mediaFile.height,
+        width,
+        height
+      );
+
+      const left = renderCoords.left;
+      const top = renderCoords.top;
       const hasPositioning = left !== 0 || top !== 0;
       const hasTimingConstraints = mediaFile.startTime > 0 || mediaFile.endTime < duration;
 
       if (hasTimingConstraints || hasPositioning) {
         console.log('Applying timing constraints and/or positioning to single image');
-        console.log(`Image positioning: left=${left}, top=${top}`);
+        console.log(`Image positioning: left=${left}, top=${top} `);
 
         // Simpler approach: Create larger background and place image at adjusted coordinates
         if (left < 0 || top < 0) {
@@ -960,12 +1056,16 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
           // Create expanded background and place image at adjusted coordinates
           const backgroundFilter = `color=black:size=${expandedWidth}x${expandedHeight}:duration=${duration}:rate=${fps}[bg_expanded]`;
 
+          console.log(`DEBUG FFmpeg overlay coordinates: adjustedLeft=${adjustedLeft}, adjustedTop=${adjustedTop}`);
+
           let overlayFilter;
           if (hasTimingConstraints) {
             overlayFilter = `[bg_expanded][img_scaled]overlay=${adjustedLeft}:${adjustedTop}:enable='between(t,${mediaFile.startTime},${mediaFile.endTime})'[video_before_crop]`;
           } else {
             overlayFilter = `[bg_expanded][img_scaled]overlay=${adjustedLeft}:${adjustedTop}[video_before_crop]`;
           }
+
+          console.log(`DEBUG FFmpeg overlay filter: ${overlayFilter}`);
 
           // Crop back to original canvas size
           const cropFilter = `[video_before_crop]crop=${width}:${height}:${padLeft}:${padTop}[final]`;
@@ -982,12 +1082,16 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
 
           const backgroundFilter = `color=black:size=${width}x${height}:duration=${duration}:rate=${fps}[bg]`;
 
+          console.log(`DEBUG FFmpeg overlay coordinates (no padding): left=${left}, top=${top}`);
+
           let overlayFilter;
           if (hasTimingConstraints) {
             overlayFilter = `[bg][img_scaled]overlay=${left}:${top}:enable='between(t,${mediaFile.startTime},${mediaFile.endTime})'[final]`;
           } else {
             overlayFilter = `[bg][img_scaled]overlay=${left}:${top}[final]`;
           }
+
+          console.log(`DEBUG FFmpeg overlay filter (no padding): ${overlayFilter}`);
 
           complexFilters = [
             `[0:v]scale=${mediaFile.width}:${mediaFile.height}[img_scaled]`,
@@ -1111,9 +1215,22 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
         }
 
         if (hasTimingConstraints) {
-          // Extract positioning from mediaFile
-          const left = parseInt(String(mediaFile.left).replace('px', '')) || 0;
-          const top = parseInt(String(mediaFile.top).replace('px', '')) || 0;
+          // Convert editor coordinates to render coordinates using original values
+          const editorLeft = parseFloat(String(mediaFile.editorLeft || '0').replace('px', '')) || 0;
+          const editorTop = parseFloat(String(mediaFile.editorTop || '0').replace('px', '')) || 0;
+          console.log(`editor positions original 4: ${editorLeft} (${editorTop})`);
+          const renderCoords = convertEditorToVideoCoords(
+            editorLeft,
+            editorTop,
+            mediaFile,
+            mediaFile.originalWidth || mediaFile.width,
+            mediaFile.originalHeight || mediaFile.height,
+            width,
+            height
+          );
+
+          const left = renderCoords.left;
+          const top = renderCoords.top;
 
           // Calculate padding needed for negative positioning
           const padLeft = Math.max(0, -left);
@@ -1144,8 +1261,21 @@ const createSingleMediaVideo = async (mediaFile, outputPath, width, height, dura
           console.log(`Applied video positioning: (${left}, ${top}) -> (${adjustedLeft}, ${adjustedTop})`);
         } else {
           // Even without timing constraints, we might need positioning
-          const left = parseInt(String(mediaFile.left).replace('px', '')) || 0;
-          const top = parseInt(String(mediaFile.top).replace('px', '')) || 0;
+          const editorLeft = parseFloat(String(mediaFile.editorLeft || '0').replace('px', '')) || 0;
+          const editorTop = parseFloat(String(mediaFile.editorTop || '0').replace('px', '')) || 0;
+          console.log(`editor positions original 3: ${editorLeft} (${editorTop})`);
+          const renderCoords = convertEditorToVideoCoords(
+            editorLeft,
+            editorTop,
+            mediaFile,
+            mediaFile.originalWidth || mediaFile.width,
+            mediaFile.originalHeight || mediaFile.height,
+            width,
+            height
+          );
+
+          const left = renderCoords.left;
+          const top = renderCoords.top;
 
           if (left !== 0 || top !== 0) {
             // Need positioning, create background and overlay with padding support
@@ -1623,8 +1753,20 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
     let minX = 0, minY = 0, maxX = width, maxY = height;
 
     visualFiles.forEach(layer => {
-      const layerLeft = parseInt(String(layer.left).replace('px', '')) || 0;
-      const layerTop = parseInt(String(layer.top).replace('px', '')) || 0;
+      const originalLeft = parseInt(String(layer.left).replace('px', '')) || 0;
+      const originalTop = parseInt(String(layer.top).replace('px', '')) || 0;
+
+      // Apply scale correction for padding calculations
+      const correction = applyScaleCorrection(
+        originalLeft,
+        originalTop,
+        layer,
+        layer.originalWidth || layer.width,
+        layer.originalHeight || layer.height
+      );
+
+      const layerLeft = correction.correctedLeft;
+      const layerTop = correction.correctedTop;
       const layerRight = layerLeft + layer.width;
       const layerBottom = layerTop + layer.height;
 
@@ -1663,11 +1805,25 @@ const createMultiLayerVideoWithTextIntegrated = async (mediaFiles, textItems, ou
       const originalLeft = parseInt(String(layer.left).replace('px', '')) || 0;
       const originalTop = parseInt(String(layer.top).replace('px', '')) || 0;
 
-      // Adjust coordinates to account for padding (convert negative coords to positive)
-      const adjustedLeft = originalLeft + padLeft;
-      const adjustedTop = originalTop + padTop;
+      // Convert editor coordinates to render coordinates using original values
+      const editorLeft = parseFloat(String(layer.editorLeft || '0').replace('px', '')) || 0;
+      const editorTop = parseFloat(String(layer.editorTop || '0').replace('px', '')) || 0;
+      console.log(`editor positions original 2: ${editorLeft} (${editorTop})`);
+      const renderCoords = convertEditorToVideoCoords(
+        editorLeft,
+        editorTop,
+        layer,
+        layer.originalWidth || layer.width,
+        layer.originalHeight || layer.height,
+        width,
+        height
+      );
 
-      console.log(`Layer ${layer.id}: original position (${originalLeft}, ${originalTop}) -> adjusted position (${adjustedLeft}, ${adjustedTop})`);
+      // Adjust coordinates to account for padding (convert negative coords to positive)
+      const adjustedLeft = renderCoords.left + padLeft;
+      const adjustedTop = renderCoords.top + padTop;
+
+      console.log(`Layer ${layer.id}: render position (${renderCoords.left}, ${renderCoords.top}) -> adjusted position (${adjustedLeft}, ${adjustedTop})`);
 
       const nextLayer = layerIndex === visualFiles.length - 1 ? 'video_before_crop' : `bg_with_layer${layerIndex + 1}`;
 
@@ -2155,8 +2311,22 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
       let minX = 0, minY = 0, maxX = width, maxY = height;
 
       [...imageFiles, ...videoFiles].forEach(layer => {
-        const layerLeft = parseInt(String(layer.left).replace('px', '')) || 0;
-        const layerTop = parseInt(String(layer.top).replace('px', '')) || 0;
+        // Convert editor coordinates to render coordinates for padding calculations using original values
+        const editorLeft = parseFloat(String(layer.editorLeft || '0').replace('px', '')) || 0;
+        const editorTop = parseFloat(String(layer.editorTop || '0').replace('px', '')) || 0;
+    console.log(`editor positions original: ${editorLeft} (${editorTop})`);
+        const renderCoords = convertEditorToVideoCoords(
+          editorLeft,
+          editorTop,
+          layer,
+          layer.originalWidth || layer.width,
+          layer.originalHeight || layer.height,
+          width,
+          height
+        );
+
+        const layerLeft = renderCoords.left;
+        const layerTop = renderCoords.top;
         const layerRight = layerLeft + layer.width;
         const layerBottom = layerTop + layer.height;
 
@@ -2191,9 +2361,18 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
         const originalLeft = parseInt(String(layer.left).replace('px', '')) || 0;
         const originalTop = parseInt(String(layer.top).replace('px', '')) || 0;
 
+        // Apply scale correction to get true visual position
+        const correction = applyScaleCorrection(
+          originalLeft,
+          originalTop,
+          layer,
+          layer.originalWidth || layer.width,
+          layer.originalHeight || layer.height
+        );
+
         // Adjust coordinates to account for padding
-        const adjustedLeft = originalLeft + padLeft;
-        const adjustedTop = originalTop + padTop;
+        const adjustedLeft = correction.correctedLeft + padLeft;
+        const adjustedTop = correction.correctedTop + padTop;
 
         const nextLayer = layerIndex === visualFiles.length - 1 ? 'video_before_crop' : `bg_with_layer${layerIndex + 1}`;
 
@@ -2211,9 +2390,18 @@ const createMultiLayerVideo = async (mediaFiles, outputPath, width, height, dura
         const originalLeft = parseInt(String(layer.left).replace('px', '')) || 0;
         const originalTop = parseInt(String(layer.top).replace('px', '')) || 0;
 
+        // Apply scale correction to get true visual position
+        const correction = applyScaleCorrection(
+          originalLeft,
+          originalTop,
+          layer,
+          layer.originalWidth || layer.width,
+          layer.originalHeight || layer.height
+        );
+
         // Adjust coordinates to account for padding
-        const adjustedLeft = originalLeft + padLeft;
-        const adjustedTop = originalTop + padTop;
+        const adjustedLeft = correction.correctedLeft + padLeft;
+        const adjustedTop = correction.correctedTop + padTop;
 
         const nextLayer = layerIndex === visualFiles.length - 1 ? 'video_before_crop' : `bg_with_layer${layerIndex + 1}`;
 
