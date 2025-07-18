@@ -364,23 +364,23 @@ const convertEditorToVideoCoords = (editorLeft, editorTop, details, originalWidt
   const scaledWidth = originalWidth * scale;
   const scaledHeight = originalHeight * scale;
 
-  // Convert editor coordinates to output coordinates - corrected scale-aware approach
-  // Key insight: The editor coordinates are relative to a coordinate system where:
-  // - At scale=1, putting item at top-left gives left=0, top=0
-  // - At other scales, we need both centering offset AND a base coordinate transformation
+  // Convert editor coordinates to output coordinates - universal formula for any image size
+  // This formula works for any image dimensions, not just 1280x1920
 
   // Calculate where the scaled image should be centered in the canvas
   const leftCenterOffset = (canvasWidth - scaledWidth) / 2;
   const topCenterOffset = (canvasHeight - scaledHeight) / 2;
 
-  // The missing piece: there's a base offset that represents the difference between
-  // the editor's coordinate system and the canvas coordinate system
-  // This is the offset needed when the image is at scale=1
-  const baseLeftOffset = (originalWidth - canvasWidth) / 2;  // 100 for 1280→1080
+  // Universal base offset calculation:
+  // The editor coordinate system appears to be based on the original image being centered
+  // in the canvas at scale=1. For any image size, we need to account for this.
+  const baseLeftOffset = (originalWidth - canvasWidth) / 2;
+  const baseTopOffset = (originalHeight - canvasHeight) / 2;
 
-  // Final formula: editor coordinates + centering offset + base coordinate system offset
+  // Universal formula that works for any image size:
+  // renderPosition = editorPosition + centeringOffsetForCurrentScale + baseCoordinateSystemOffset
   const renderLeft = editorLeft + leftCenterOffset + baseLeftOffset;
-  const renderTop = editorTop + topCenterOffset;
+  const renderTop = editorTop + topCenterOffset + baseTopOffset;
 
   console.log(`Normalized position: editor(${editorLeft}, ${editorTop}) scale(${scale}) -> original(${originalWidth}x${originalHeight}) -> scaled(${scaledWidth}x${scaledHeight}) -> normalized(${renderLeft}, ${renderTop})`);
 
