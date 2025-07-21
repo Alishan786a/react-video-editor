@@ -1,15 +1,23 @@
 // API Configuration
 // Update these URLs to point to your own backend APIs
 
+// Backend type selection - 'ffmpeg' or 'remotion'
+const BACKEND_TYPE = import.meta.env.VITE_BACKEND_TYPE || 'remotion';
+
 export const API_CONFIG = {
   // Upload API - handles file uploads
   UPLOAD_API_URL: import.meta.env.VITE_UPLOAD_API_URL || 'http://localhost:3000/api/v1/editor',
 
-  // Video Rendering API (optional)
-  RENDER_API_URL: import.meta.env.VITE_RENDER_API_URL || 'http://localhost:3000/api/v1/editor',
+  // Video Rendering API (supports both FFmpeg and Remotion backends)
+  RENDER_API_URL: BACKEND_TYPE === 'remotion'
+    ? import.meta.env.VITE_REMOTION_API_URL || 'http://localhost:3001/api/v1/editor/remotion'
+    : import.meta.env.VITE_RENDER_API_URL || 'http://localhost:3000/api/v1/editor',
 
   // Caption Generation API (optional)
   CAPTIONS_API_URL: import.meta.env.VITE_CAPTIONS_API_URL || 'http://localhost:3000/api/v1/editor',
+
+  // Backend type for debugging
+  BACKEND_TYPE,
 };
 
 // API Endpoints
