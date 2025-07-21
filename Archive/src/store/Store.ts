@@ -622,19 +622,48 @@ export class Store {
     let mp4 = this.selectedVideoFormat === 'mp4'
     const canvas = document.getElementById("canvas") as HTMLCanvasElement;
     const stream = canvas.captureStream(30);
+
+    // Get both audio elements and video elements (for video audio)
     const audioElements = this.editorElements.filter(isEditorAudioElement)
+    const videoElements = this.editorElements.filter(isEditorVideoElement)
     const audioStreams: MediaStream[] = [];
+
+    // Process dedicated audio elements
     audioElements.forEach((audio) => {
       const audioElement = document.getElementById(audio.properties.elementId) as HTMLAudioElement;
-      let ctx = new AudioContext();
-      let sourceNode = ctx.createMediaElementSource(audioElement);
-      let dest = ctx.createMediaStreamDestination();
-      sourceNode.connect(dest);
-      sourceNode.connect(ctx.destination);
-      audioStreams.push(dest.stream);
+      if (audioElement) {
+        let ctx = new AudioContext();
+        let sourceNode = ctx.createMediaElementSource(audioElement);
+        let dest = ctx.createMediaStreamDestination();
+        sourceNode.connect(dest);
+        sourceNode.connect(ctx.destination);
+        audioStreams.push(dest.stream);
+      }
     });
+
+    // Process video elements to extract their audio
+    videoElements.forEach((video) => {
+      const videoElement = document.getElementById(video.properties.elementId) as HTMLVideoElement;
+      if (videoElement && isHtmlVideoElement(videoElement)) {
+        try {
+          let ctx = new AudioContext();
+          let sourceNode = ctx.createMediaElementSource(videoElement);
+          let dest = ctx.createMediaStreamDestination();
+          sourceNode.connect(dest);
+          sourceNode.connect(ctx.destination);
+          audioStreams.push(dest.stream);
+        } catch (error) {
+          console.warn('Could not extract audio from video element:', error);
+        }
+      }
+    });
+
+    // Add all audio streams to the main stream
     audioStreams.forEach((audioStream) => {
-      stream.addTrack(audioStream.getAudioTracks()[0]);
+      const audioTracks = audioStream.getAudioTracks();
+      if (audioTracks.length > 0) {
+        stream.addTrack(audioTracks[0]);
+      }
     });
     const video = document.createElement("video");
     video.srcObject = stream;
