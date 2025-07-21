@@ -2,106 +2,101 @@
 import React from "react";
 import { StoreContext } from "@/store";
 import { observer } from "mobx-react";
-import {
-  MdDownload,
-  MdVideoLibrary,
-  MdImage,
-  MdTransform,
-  MdTitle,
-  MdAudiotrack,
-  MdOutlineFormatColorFill,
-  MdMovieFilter,
-} from "react-icons/md";
+import { Button } from "./ui/button";
+import { Icons } from "./shared/icons";
+import { cn } from "../lib/utils";
 import { Store } from "@/store/Store";
 
 export const Menu = observer(() => {
   const store = React.useContext(StoreContext);
 
   return (
-    <ul className="bg-white h-full">
+    <div className="flex flex-col h-full p-2 gap-1">
       {MENU_OPTIONS.map((option) => {
         const isSelected = store.selectedMenuOption === option.name;
+        const IconComponent = Icons[option.iconName as keyof typeof Icons];
         return (
-          <li
+          <Button
             key={option.name}
-            className={`h-[72px] w-[72px] flex flex-col items-center justify-center ${isSelected ? "bg-slate-200" : ""}`}
+            onClick={() => option.action(store)}
+            className={cn(
+              isSelected
+                ? "bg-secondary"
+                : "text-muted-foreground"
+            )}
+            variant="ghost"
+            size="icon"
+            title={option.name}
           >
-            <button
-              onClick={() => option.action(store)}
-              className={`flex flex-col items-center`}
-            >
-              <option.icon
-                size="20"
-                color={
-                  isSelected ? "#000" : "#444"
-                }
-              />
-              <div
-                className={`text-[0.6rem] hover:text-black ${isSelected ? "text-black" : "text-slate-600"}`}
-              >
-                {option.name}
-              </div>
-            </button>
-          </li>
+            {IconComponent ? <IconComponent width={20} /> : <option.icon size="20" />}
+          </Button>
         );
       })}
-    </ul>
+    </div>
   );
 });
 
 const MENU_OPTIONS = [
   {
     name: "Video",
-    icon: MdVideoLibrary,
+    iconName: "video",
+    icon: () => <Icons.video width={20} />,
     action: (store: Store) => {
       store.setSelectedMenuOption("Video");
     },
   },
   {
     name: "Audio",
-    icon: MdAudiotrack,
+    iconName: "audio",
+    icon: () => <Icons.audio width={20} />,
     action: (store: Store) => {
       store.setSelectedMenuOption("Audio");
     },
   },
   {
     name: "Image",
-    icon: MdImage,
+    iconName: "image",
+    icon: () => <Icons.image width={20} />,
     action: (store: Store) => {
       store.setSelectedMenuOption("Image");
     },
   },
   {
     name: "Text",
-    icon: MdTitle,
+    iconName: "type",
+    icon: () => <Icons.type width={20} />,
     action: (store: Store) => {
       store.setSelectedMenuOption("Text");
     },
   },
   {
     name: "Animation",
-    icon: MdTransform,
+    iconName: "animation",
+    icon: () => <Icons.animation width={20} />,
     action: (store: Store) => {
       store.setSelectedMenuOption("Animation");
     },
   },
   {
     name: "Effect",
-    icon: MdMovieFilter,
+    iconName: "shapes",
+    icon: () => <Icons.shapes width={20} />,
     action: (store: Store) => {
       store.setSelectedMenuOption("Effect");
     },
   },
   {
     name: "Fill",
-    icon: MdOutlineFormatColorFill,
+    iconName: "palette",
+    icon: () => <Icons.palette width={20} />,
     action: (store: Store) => {
       store.setSelectedMenuOption("Fill");
     },
   },
   {
     name: "Export",
-    icon: MdDownload,
+    iconName: "download",
+    icon: () => <Icons.download width={20} />,
     action: (store: Store) => {
       store.setSelectedMenuOption("Export");
     },

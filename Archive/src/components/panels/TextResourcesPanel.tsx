@@ -58,27 +58,20 @@ const TEXT_RESOURCES = [
 
 export const TextResourcesPanel = observer(() => {
   return (
-    <div className="bg-slate-200 h-full">
-      <div className="text-sm px-[16px] pt-[16px] pb-[8px] font-semibold text-black">
-        Text
-      </div>
-      <ul>
-
-
+    <div className="h-full">
+      <div className="grid gap-2">
         {TEXT_RESOURCES.map((resource) => {
           return (
-            <li
-              key={resource.name}
-            >
+            <div key={resource.name}>
               <TextResource
                 sampleText={resource.name}
                 fontSize={resource.fontSize}
                 fontWeight={resource.fontWeight}
               />
-            </li>
+            </div>
           );
         })}
-      </ul>
+      </div>
     </div>
   );
 });

@@ -13,18 +13,18 @@ export const TextResource = observer(
   ({ fontSize, fontWeight, sampleText }: TextResourceProps) => {
     const store = React.useContext(StoreContext);
     return (
-      <div className="items-center m-[15px] flex flex-row">
+      <div className="flex items-center justify-between p-3 hover:bg-accent rounded-lg cursor-pointer group">
         <div
-          className="flex-1 text-black px-2 py-1"
+          className="flex-1 text-foreground"
           style={{
-            fontSize: `${fontSize}px`,
+            fontSize: `${Math.min(fontSize, 18)}px`,
             fontWeight: `${fontWeight}`,
           }}
         >
           {sampleText}
         </div>
         <button
-          className="h-[32px] w-[32px] hover:bg-black bg-[rgba(0,0,0,.25)] rounded z-10 text-white font-bold py-1 flex items-center justify-center"
+          className="h-8 w-8 hover:bg-primary hover:text-primary-foreground bg-secondary text-secondary-foreground rounded-md flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
           onClick={() =>
             store.addText({
               text: sampleText,
@@ -33,7 +33,7 @@ export const TextResource = observer(
             })
           }
         >
-          <MdAdd size="25" />
+          <MdAdd size="18" />
         </button>
       </div>
     );
