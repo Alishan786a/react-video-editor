@@ -24,3 +24,9 @@ dist-ssr
 *.sw?
 .vercel
 .env
+
+
+
+Archive/.next
+Archive/docs
+
