@@ -36,10 +36,13 @@ const ensureDirectories = async () => {
   const dirs = [STORAGE_PATH, RENDERS_PATH, TEMP_PATH, ASSETS_PATH];
   for (const dir of dirs) {
     await fs.ensureDir(dir);
+    console.log(`📁 Directory ensured: ${dir}`);
   }
 };
 
+console.log('📁 Ensuring storage directories...');
 await ensureDirectories();
+console.log('✅ All storage directories ready');
 
 // Health check endpoint
 app.get('/api/v1/editor/render/health', async (req, res) => {
@@ -238,9 +241,17 @@ const renderVideoCustom = async (renderId, projectData) => {
       currentStep: 'Initializing video composition' 
     });
 
-    // Step 2: Render video with FFmpeg
+    // Step 2: Ensure output directory and render video with FFmpeg
     const outputPath = path.join(RENDERS_PATH, `${renderId}.mp4`);
-    
+
+    // Double-check that the renders directory exists
+    await fs.ensureDir(RENDERS_PATH);
+    console.log(`📁 Renders directory confirmed: ${RENDERS_PATH}`);
+
+    console.log(`🔍 DEBUG SERVER: About to call renderVideo for ${renderId}`);
+    console.log(`🔍 DEBUG SERVER: trackItemIds = [${projectData.trackItemIds?.join(', ') || 'undefined'}]`);
+    console.log(`🔍 DEBUG SERVER: trackItemsMap keys = [${Object.keys(projectData.trackItemsMap || {}).join(', ')}]`);
+
     await videoRenderer.renderVideo({
       projectData,
       processedMedia,
@@ -248,7 +259,7 @@ const renderVideoCustom = async (renderId, projectData) => {
       tempPath: TEMP_PATH,
       onProgress: (progress, step) => {
         const totalProgress = 25 + (progress * 0.75);
-        progressTracker.updateJob(renderId, { 
+        progressTracker.updateJob(renderId, {
           progress: Math.round(totalProgress),
           currentStep: step || 'Rendering video'
         });

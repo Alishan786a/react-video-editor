@@ -54,6 +54,10 @@ export class VideoRenderer {
       onProgress?.(10, 'Preparing video layers');
 
       // Separate items by type
+      console.log(`🔍 DEBUG: trackItemIds = [${trackItemIds.join(', ')}]`);
+      console.log(`🔍 DEBUG: trackItemsMap keys = [${Object.keys(trackItemsMap).join(', ')}]`);
+      console.log(`🔍 DEBUG: trackItemDetailsMap keys = [${Object.keys(trackItemDetailsMap).join(', ')}]`);
+
       const layers = this.organizeLayersByType(trackItemIds, trackItemsMap, trackItemDetailsMap);
       
       onProgress?.(20, 'Processing video layers');
@@ -143,14 +147,26 @@ export class VideoRenderer {
       audios: []
     };
 
-    trackItemIds.forEach(itemId => {
+    console.log(`🔍 Organizing ${trackItemIds.length} items by type`);
+
+    trackItemIds.forEach((itemId, index) => {
       const item = trackItemsMap[itemId];
       const details = trackItemDetailsMap[itemId];
-      
-      if (!item || !details) return;
+
+      if (!item || !details) {
+        console.warn(`⚠️ Missing data for item ${itemId}`);
+        return;
+      }
 
       const itemType = details.details?.type || details.type;
-      const layerData = { itemId, item, details };
+      const layerData = {
+        itemId,
+        item,
+        details,
+        originalIndex: index // Keep track of original order like Remotion
+      };
+
+      console.log(`📋 Item ${index}: ${itemId} (type: ${itemType})`);
 
       switch (itemType) {
         case 'video':
@@ -165,9 +181,12 @@ export class VideoRenderer {
         case 'audio':
           layers.audios.push(layerData);
           break;
+        default:
+          console.warn(`⚠️ Unknown item type: ${itemType} for item ${itemId}`);
       }
     });
 
+    console.log(`📊 Layer summary: ${layers.videos.length} videos, ${layers.images.length} images, ${layers.texts.length} texts, ${layers.audios.length} audios`);
     return layers;
   }
 
@@ -205,8 +224,11 @@ export class VideoRenderer {
 
       processedLayers.push({
         path: outputFile,
-        zIndex: index,
-        timing: item.display || {}
+        zIndex: layer.originalIndex, // Use original index from trackItemIds for proper z-ordering
+        timing: item.display || {},
+        coords: coords, // Store coordinates for overlay positioning
+        itemId: itemId,
+        type: 'video'
       });
     }
 
@@ -246,8 +268,11 @@ export class VideoRenderer {
 
       processedLayers.push({
         path: outputFile,
-        zIndex: index + 100, // Offset to avoid conflicts with video layers
-        timing: item.display || {}
+        zIndex: layer.originalIndex, // Use original index from trackItemIds for proper z-ordering
+        timing: item.display || {},
+        coords: coords, // Store coordinates for overlay positioning
+        itemId: itemId,
+        type: 'image'
       });
     }
 
@@ -275,8 +300,11 @@ export class VideoRenderer {
 
       processedLayers.push({
         path: outputFile,
-        zIndex: index + 200, // Offset to avoid conflicts with other layers
-        timing: item.display || {}
+        zIndex: layer.originalIndex, // Use original index from trackItemIds for proper z-ordering
+        timing: item.display || {},
+        coords: { left: 0, top: 0, width: canvasWidth, height: canvasHeight }, // Text layers are full canvas
+        itemId: itemId,
+        type: 'text'
       });
     }
 
@@ -296,39 +324,50 @@ export class VideoRenderer {
         command = command.duration(trimDuration);
       }
 
-      // Build filter complex for positioning and effects
+      // Build filter chain for positioning and effects
       const filters = [];
-      
-      // Scale and position
-      filters.push(`scale=${coords.width}:${coords.height}`);
-      
+
+      // Scale and position - ensure even dimensions for H.264 compatibility
+      const evenWidth = coords.width % 2 === 0 ? coords.width : coords.width + 1;
+      const evenHeight = coords.height % 2 === 0 ? coords.height : coords.height + 1;
+
+      console.log(`🎯 Scaling: ${coords.width}x${coords.height} -> ${evenWidth}x${evenHeight} (even)`);
+      filters.push(`scale=${evenWidth}:${evenHeight}`);
+
       // Add effects
       if (effects.opacity < 1) {
         filters.push(`format=yuva420p,colorchannelmixer=aa=${effects.opacity}`);
       }
-      
+
       if (effects.blur > 0) {
         filters.push(`gblur=sigma=${effects.blur}`);
       }
 
-      // Overlay on canvas
-      const filterComplex = [
-        `color=black:size=${canvasWidth}x${canvasHeight}:duration=${duration}:rate=${frameRate}[bg]`,
-        `[0:v]${filters.join(',')}[scaled]`,
-        `[bg][scaled]overlay=${coords.left}:${coords.top}:enable='between(t,${timing.from/1000 || 0},${timing.to/1000 || duration})'`
-      ].join(';');
+      // Don't add padding here - we'll position during final overlay
+      // Store coordinates for later use in composition
 
       command
-        .complexFilter(filterComplex)
+        .videoFilter(filters)
         .outputOptions([
           '-c:v libx264',
           '-preset fast',
           '-crf 23',
-          '-pix_fmt yuv420p'
+          '-pix_fmt yuv420p',
+          `-t ${duration}`,
+          `-r ${frameRate}`
         ])
         .output(outputPath)
-        .on('end', resolve)
-        .on('error', reject)
+        .on('start', (commandLine) => {
+          console.log('🎬 Video processing command:', commandLine);
+        })
+        .on('end', () => {
+          console.log(`✅ Video layer processed: ${path.basename(outputPath)}`);
+          resolve();
+        })
+        .on('error', (error) => {
+          console.error('❌ Video processing error:', error);
+          reject(error);
+        })
         .run();
     });
   }
@@ -338,8 +377,12 @@ export class VideoRenderer {
       // Simplified approach: just convert image to video with proper scaling and positioning
       const filters = [];
 
-      // Scale to fit coordinates
-      filters.push(`scale=${coords.width}:${coords.height}`);
+      // Scale to fit coordinates - ensure even dimensions for H.264 compatibility
+      const evenWidth = coords.width % 2 === 0 ? coords.width : coords.width + 1;
+      const evenHeight = coords.height % 2 === 0 ? coords.height : coords.height + 1;
+
+      console.log(`🎯 Image scaling: ${coords.width}x${coords.height} -> ${evenWidth}x${evenHeight} (even)`);
+      filters.push(`scale=${evenWidth}:${evenHeight}`);
 
       // Add effects
       if (effects.opacity < 1) {
@@ -350,20 +393,19 @@ export class VideoRenderer {
         filters.push(`gblur=sigma=${effects.blur}`);
       }
 
-      // Create video from image with loop
+      // Create video from image using input loop instead of filter
       ffmpeg(inputPath)
-        .videoFilter([
-          ...filters,
-          `loop=loop=-1:size=1:start=0`,
-          `pad=${canvasWidth}:${canvasHeight}:${coords.left}:${coords.top}:black`
+        .inputOptions([
+          '-loop 1',
+          `-t ${duration}`,
+          `-r ${frameRate}`
         ])
+        .videoFilter(filters)
         .outputOptions([
           '-c:v libx264',
           '-preset fast',
           '-crf 23',
-          '-pix_fmt yuv420p',
-          `-t ${duration}`,
-          `-r ${frameRate}`
+          '-pix_fmt yuv420p'
         ])
         .output(outputPath)
         .on('start', (commandLine) => {
@@ -382,9 +424,25 @@ export class VideoRenderer {
   }
 
   async compositeVideo({ videoLayers, imageLayers, textLayers, audioTrack, outputPath, canvasWidth, canvasHeight, duration, frameRate, onProgress }) {
-    return new Promise((resolve, reject) => {
+    return new Promise(async (resolve, reject) => {
+      try {
+        // Ensure output directory exists
+        await fs.ensureDir(path.dirname(outputPath));
+        console.log(`📁 Output directory ensured: ${path.dirname(outputPath)}`);
+      } catch (error) {
+        console.error('❌ Failed to create output directory:', error);
+        reject(error);
+        return;
+      }
+
+      // Combine all layers and sort by original trackItemIds order (like Remotion)
       const allLayers = [...videoLayers, ...imageLayers, ...textLayers]
         .sort((a, b) => a.zIndex - b.zIndex);
+
+      console.log(`🎬 Final layer composition order:`);
+      allLayers.forEach((layer, index) => {
+        console.log(`   ${index}: ${layer.itemId} (${layer.type}) - z-index: ${layer.zIndex}`);
+      });
 
       if (allLayers.length === 0) {
         // Create blank video if no layers - use a simple black image approach
@@ -420,53 +478,133 @@ export class VideoRenderer {
         return;
       }
 
-      let command = ffmpeg();
-      
-      // Add all layer inputs
-      allLayers.forEach(layer => {
-        command = command.input(layer.path);
-      });
+      if (allLayers.length === 1) {
+        // Single layer - just copy it
+        console.log('📹 Single layer composition');
+        ffmpeg(allLayers[0].path)
+          .outputOptions([
+            '-c:v libx264',
+            '-preset medium',
+            '-crf 20',
+            '-pix_fmt yuv420p',
+            '-movflags +faststart'
+          ])
+          .output(outputPath)
+          .on('progress', (progress) => {
+            onProgress?.(progress.percent || 0);
+          })
+          .on('start', (commandLine) => {
+            console.log('🎬 Single layer command:', commandLine);
+          })
+          .on('end', () => {
+            console.log('✅ Single layer composition completed');
+            resolve();
+          })
+          .on('error', (error) => {
+            console.error('❌ Single layer composition error:', error);
+            reject(error);
+          })
+          .run();
+      } else {
+        // Multiple layers - create background and overlay each layer with proper positioning
+        console.log(`📹 Multi-layer composition: ${allLayers.length} layers`);
 
-      // Add audio if available
-      if (audioTrack) {
-        command = command.input(audioTrack);
+        // Validate all layer files exist
+        for (const layer of allLayers) {
+          if (!await fs.pathExists(layer.path)) {
+            throw new Error(`Layer file not found: ${layer.path}`);
+          }
+          console.log(`✅ Layer file exists: ${path.basename(layer.path)} (${(await fs.stat(layer.path)).size} bytes)`);
+        }
+
+        let command = ffmpeg();
+
+        // No need for separate background - use first layer as background
+
+        // Use the first layer as background instead of creating a separate background
+        command = command.input(allLayers[0].path);
+
+        // Add remaining layer inputs (skip first layer since it's already added as background)
+        for (let i = 1; i < allLayers.length; i++) {
+          const layer = allLayers[i];
+          console.log(`📥 Adding layer ${i + 1}: ${path.basename(layer.path)} (${layer.type}) at (${layer.coords?.left || 0}, ${layer.coords?.top || 0})`);
+          command = command.input(layer.path);
+        }
+
+        // Add audio if available
+        if (audioTrack) {
+          command = command.input(audioTrack);
+        }
+
+        // Build complex filter for overlaying layers with proper positioning
+        const filterParts = [];
+
+        // Start with first layer padded to canvas size
+        const firstLayer = allLayers[0];
+        const firstX = firstLayer.coords?.left || 0;
+        const firstY = firstLayer.coords?.top || 0;
+        console.log(`🎯 First layer background: pad to ${canvasWidth}x${canvasHeight} at (${firstX}, ${firstY})`);
+        filterParts.push(`[0:v]pad=${canvasWidth}:${canvasHeight}:${firstX}:${firstY}:black[bg]`);
+
+        let currentOutput = '[bg]';
+
+        // Overlay each subsequent layer on top with proper positioning
+        for (let i = 1; i < allLayers.length; i++) {
+          const layer = allLayers[i];
+          const inputIndex = i; // Direct index since first layer is input 0
+          const nextOutput = i === allLayers.length - 1 ? '[final]' : `[tmp${i}]`;
+
+          const x = layer.coords?.left || 0;
+          const y = layer.coords?.top || 0;
+
+          console.log(`🎯 Overlaying layer ${i + 1} at position (${x}, ${y}) - input[${inputIndex}:v] -> ${nextOutput}`);
+          filterParts.push(`${currentOutput}[${inputIndex}:v]overlay=${x}:${y}:shortest=1${nextOutput}`);
+          currentOutput = `[tmp${i}]`;
+        }
+
+        console.log('🔧 Multi-layer positioning filter:', filterParts.join(';'));
+        console.log('🔧 Filter parts breakdown:');
+        filterParts.forEach((part, index) => {
+          console.log(`   ${index + 1}: ${part}`);
+        });
+
+        command = command.complexFilter(filterParts, ['final']);
+
+        command
+          .outputOptions([
+            '-c:v libx264',
+            '-preset medium',
+            '-crf 20',
+            '-pix_fmt yuv420p',
+            '-movflags +faststart',
+            `-t ${duration}`
+          ]);
+
+        if (audioTrack) {
+          command = command.outputOptions(['-c:a aac', '-b:a 128k']);
+        }
+
+        command
+          .output(outputPath)
+          .on('progress', (progress) => {
+            onProgress?.(progress.percent || 0);
+          })
+          .on('start', (commandLine) => {
+            console.log('🎬 Multi-layer positioning command:', commandLine);
+          })
+          .on('stderr', (stderrLine) => {
+            console.log('🔍 FFmpeg stderr:', stderrLine);
+          })
+          .on('end', () => {
+            console.log('✅ Multi-layer composition completed');
+            resolve();
+          })
+          .on('error', (error) => {
+            console.error('❌ Multi-layer composition error:', error);
+            reject(error);
+          })
+          .run();
       }
-
-      // Build complex filter for layering
-      const filterParts = [];
-      let currentOutput = '[0:v]';
-
-      for (let i = 1; i < allLayers.length; i++) {
-        const nextOutput = i === allLayers.length - 1 ? '' : `[tmp${i}]`;
-        filterParts.push(`${currentOutput}[${i}:v]overlay${nextOutput}`);
-        currentOutput = `[tmp${i}]`;
-      }
-
-      if (filterParts.length > 0) {
-        command = command.complexFilter(filterParts.join(';'));
-      }
-
-      command
-        .outputOptions([
-          '-c:v libx264',
-          '-preset medium',
-          '-crf 20',
-          '-pix_fmt yuv420p',
-          '-movflags +faststart'
-        ]);
-
-      if (audioTrack) {
-        command = command.outputOptions(['-c:a aac', '-b:a 128k']);
-      }
-
-      command
-        .output(outputPath)
-        .on('progress', (progress) => {
-          onProgress?.(progress.percent || 0);
-        })
-        .on('end', resolve)
-        .on('error', reject)
-        .run();
     });
   }
 }

@@ -1,6 +1,6 @@
 import fetch from 'node-fetch';
 
-const API_BASE = 'http://localhost:3002/api/v1/editor';
+const API_BASE = 'http://localhost:3001/api/v1/editor';
 
 // Test data with image and video
 const fullTestData = {
