@@ -1,0 +1,56 @@
+version: '3.8'
+
+services:
+  video-renderer:
+    build: .
+    ports:
+      - "3002:3002"
+    environment:
+      - NODE_ENV=production
+      - PORT=3002
+      - MAX_CONCURRENT_JOBS=3
+    volumes:
+      - ./storage:/app/storage
+      - /tmp:/tmp
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/api/v1/editor/render/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: '2.0'
+        reservations:
+          memory: 2G
+          cpus: '1.0'
+
+  # Optional: Redis for job queuing (for high-traffic scenarios)
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    profiles:
+      - with-redis
+
+  # Optional: Nginx for load balancing multiple instances
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - video-renderer
+    restart: unless-stopped
+    profiles:
+      - with-nginx
+
+volumes:
+  redis_data:
