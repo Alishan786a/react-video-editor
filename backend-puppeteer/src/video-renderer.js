@@ -372,25 +372,32 @@ export class VideoRenderer {
                 element.style.borderRadius = borderRadiusPx + 'px';
             }
 
-            // Apply border properties
-            if (details.border) {
-                element.style.border = details.border;
-            }
-            if (details.borderWidth !== undefined) {
-                element.style.borderWidth = typeof details.borderWidth === 'number'
-                    ? details.borderWidth + 'px'
-                    : details.borderWidth;
-            }
-            if (details.borderColor) {
-                element.style.borderColor = details.borderColor;
-            }
-            if (details.borderStyle) {
-                element.style.borderStyle = details.borderStyle;
+            // Apply outline and shadow using the exact same formula as frontend
+            // Frontend combines outline and shadow into a single box-shadow property
+            const boxShadowParts = [];
+
+            // Add outline (border) as box-shadow: "0 0 0 [borderWidth]px [borderColor]"
+            if (details.borderWidth && details.borderWidth > 0) {
+                const borderWidth = details.borderWidth;
+                const borderColor = details.borderColor || '#000000';
+                boxShadowParts.push('0 0 0 ' + borderWidth + 'px ' + borderColor);
             }
 
-            // Apply box shadow
-            if (details.boxShadow) {
-                element.style.boxShadow = details.boxShadow;
+            // Add shadow: "[x]px [y]px [blur]px [color]"
+            if (details.boxShadow && (details.boxShadow.x !== 0 || details.boxShadow.y !== 0 || details.boxShadow.blur !== 0)) {
+                const shadow = details.boxShadow;
+                const x = shadow.x || 0;
+                const y = shadow.y || 0;
+                const blur = shadow.blur || 0;
+                const color = shadow.color || '#000000';
+                boxShadowParts.push(x + 'px ' + y + 'px ' + blur + 'px ' + color);
+            }
+
+            // Apply combined box-shadow
+            if (boxShadowParts.length > 0) {
+                element.style.boxShadow = boxShadowParts.join(', ');
+            } else {
+                element.style.boxShadow = 'none';
             }
 
             // Apply background properties
