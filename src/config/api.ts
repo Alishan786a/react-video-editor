@@ -1,18 +1,22 @@
 // API Configuration
 // Update these URLs to point to your own backend APIs
 
-// Backend type selection - 'custom', 'remotion', or 'ffmpeg'
+// Backend type selection - 'custom', 'remotion', 'ffmpeg', or 'puppeteer'
 const BACKEND_TYPE = import.meta.env.VITE_BACKEND_TYPE || 'custom';
 
 export const API_CONFIG = {
-  // Upload API - handles file uploads
-  UPLOAD_API_URL: import.meta.env.VITE_UPLOAD_API_URL || 'http://localhost:3000/api/v1/editor',
+  // Upload API - handles file uploads (uses same backend as render API)
+  UPLOAD_API_URL: BACKEND_TYPE === 'puppeteer'
+    ? import.meta.env.VITE_PUPPETEER_API_URL || 'http://localhost:3005/api/v1/editor'
+    : import.meta.env.VITE_UPLOAD_API_URL || 'http://localhost:3000/api/v1/editor',
 
-  // Video Rendering API (supports Custom, Remotion, and FFmpeg backends)
+  // Video Rendering API (supports Custom, Remotion, FFmpeg, and Puppeteer backends)
   RENDER_API_URL: BACKEND_TYPE === 'custom'
     ? import.meta.env.VITE_CUSTOM_API_URL || 'http://localhost:3001/api/v1/editor'
     : BACKEND_TYPE === 'remotion'
     ? import.meta.env.VITE_REMOTION_API_URL || 'http://localhost:3001/api/v1/editor/remotion'
+    : BACKEND_TYPE === 'puppeteer'
+    ? import.meta.env.VITE_PUPPETEER_API_URL || 'http://localhost:3005/api/v1/editor'
     : import.meta.env.VITE_RENDER_API_URL || 'http://localhost:3000/api/v1/editor',
 
   // Caption Generation API (optional)
