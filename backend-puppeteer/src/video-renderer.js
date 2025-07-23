@@ -81,20 +81,53 @@ export class VideoRenderer {
       const framesDir = path.join(__dirname, '..', 'storage', 'temp', `frames_${renderId}`);
       await fs.ensureDir(framesDir);
       
-      // Capture frames
+      // Capture frames with improved stability
       for (let frame = 0; frame < totalFrames; frame++) {
         const timeMs = (frame / fps) * 1000;
-        
-        // Set current frame time
+
+        // Set current frame time and wait for rendering to complete
         await page.evaluate((time) => {
           if (window.setFrame) {
             window.setFrame(time);
           }
+          // Force a repaint to ensure rendering is complete
+          if (window.requestAnimationFrame) {
+            return new Promise(resolve => {
+              window.requestAnimationFrame(() => {
+                window.requestAnimationFrame(resolve);
+              });
+            });
+          }
         }, timeMs);
-        
-        // Wait a bit for rendering
+
+        // Wait longer for rendering to stabilize (especially for videos and animations)
+        await page.waitForTimeout(200);
+
+        // Wait for any images or videos to load
+        await page.evaluate(() => {
+          return Promise.all([
+            ...Array.from(document.querySelectorAll('img')).map(img => {
+              if (img.complete) return Promise.resolve();
+              return new Promise(resolve => {
+                img.onload = resolve;
+                img.onerror = resolve;
+                setTimeout(resolve, 1000); // Timeout after 1s
+              });
+            }),
+            ...Array.from(document.querySelectorAll('video')).map(video => {
+              if (video.readyState >= 2) return Promise.resolve();
+              return new Promise(resolve => {
+                video.onloadeddata = resolve;
+                video.onerror = resolve;
+                setTimeout(resolve, 1000); // Timeout after 1s
+              });
+            })
+          ]);
+        });
+
+        // Additional wait to ensure everything is rendered
         await page.waitForTimeout(100);
-        
+
         // Capture screenshot
         const framePath = path.join(framesDir, `${frame.toString().padStart(6, '0')}.png`);
         await page.screenshot({
@@ -105,9 +138,10 @@ export class VideoRenderer {
             y: 0,
             width: projectData.size?.width || 1080,
             height: projectData.size?.height || 1920
-          }
+          },
+          omitBackground: false // Ensure background is included
         });
-        
+
         // Update progress
         const progress = 20 + Math.floor((frame / totalFrames) * 60);
         this.updateProgress(renderJobs, renderId, progress, `Capturing frame ${frame + 1}/${totalFrames}`);
@@ -154,22 +188,48 @@ export class VideoRenderer {
             padding: 0;
             background: #000;
             overflow: hidden;
+            /* Prevent text selection and improve rendering */
+            -webkit-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+            /* Improve rendering performance */
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
         }
         #video-canvas {
             width: ${projectData.size?.width || 1080}px;
             height: ${projectData.size?.height || 1920}px;
             position: relative;
             background: #000;
+            /* Prevent layout shifts and improve performance */
+            contain: layout style paint;
+            will-change: contents;
+            /* Prevent blinking by ensuring smooth transitions */
+            backface-visibility: hidden;
+            -webkit-backface-visibility: hidden;
         }
         .video-item {
             position: absolute;
             overflow: hidden;
+            /* Improve performance and prevent blinking */
+            will-change: transform, opacity;
+            backface-visibility: hidden;
+            -webkit-backface-visibility: hidden;
+            /* Ensure smooth transitions */
+            transition: opacity 0.1s ease-out;
         }
         .video-item video,
         .video-item img {
             width: 100%;
             height: 100%;
             object-fit: cover;
+            /* Prevent image/video flickering */
+            backface-visibility: hidden;
+            -webkit-backface-visibility: hidden;
+            /* Smooth scaling and rendering */
+            image-rendering: -webkit-optimize-contrast;
+            image-rendering: crisp-edges;
         }
         .text-item {
             position: absolute;
@@ -179,6 +239,15 @@ export class VideoRenderer {
             align-items: center;
             justify-content: center;
             text-align: center;
+            /* Prevent text rendering issues and blinking */
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+            text-rendering: optimizeLegibility;
+            will-change: transform, opacity;
+            backface-visibility: hidden;
+            -webkit-backface-visibility: hidden;
+            /* Ensure smooth transitions */
+            transition: opacity 0.1s ease-out;
         }
     </style>
 </head>
@@ -198,7 +267,17 @@ export class VideoRenderer {
         
         function renderFrame() {
             const canvas = document.getElementById('video-canvas');
-            canvas.innerHTML = '';
+
+            // Instead of clearing and re-rendering everything, update existing elements
+            // This prevents blinking by maintaining DOM stability
+            const existingElements = new Map();
+            Array.from(canvas.children).forEach(el => {
+                if (el.dataset.itemId) {
+                    existingElements.set(el.dataset.itemId, el);
+                }
+            });
+
+            const activeItems = new Set();
 
             // Render each track item
             projectData.trackItemIds.forEach(itemId => {
@@ -212,21 +291,49 @@ export class VideoRenderer {
                 const endTime = trackItem.display?.to || 5000;
 
                 if (currentTime >= startTime && currentTime <= endTime) {
+                    activeItems.add(itemId);
+
                     // Combine the data structures to match your frontend
                     const combinedItem = {
                         ...itemDetails,
                         display: trackItem.display,
                         trim: trackItem.trim
                     };
-                    renderItem(combinedItem, canvas);
+
+                    // Update existing element or create new one
+                    if (existingElements.has(itemId)) {
+                        updateItem(combinedItem, existingElements.get(itemId));
+                    } else {
+                        const newElement = createItem(combinedItem, itemId);
+                        canvas.appendChild(newElement);
+                    }
+                }
+            });
+
+            // Hide items that should not be visible (instead of removing them)
+            existingElements.forEach((element, itemId) => {
+                if (!activeItems.has(itemId)) {
+                    element.style.display = 'none';
+                } else {
+                    element.style.display = element.dataset.originalDisplay || 'block';
                 }
             });
         }
         
-        function renderItem(item, canvas) {
+        function createItem(item, itemId) {
             const element = document.createElement('div');
             element.className = item.type === 'text' ? 'text-item' : 'video-item';
+            element.dataset.itemId = itemId;
+            element.dataset.itemType = item.type;
 
+            // Store original display value
+            element.dataset.originalDisplay = item.type === 'text' ? 'flex' : 'block';
+
+            updateItem(item, element);
+            return element;
+        }
+
+        function updateItem(item, element) {
             // Use the correct data structure - your frontend uses 'details' not 'fabricObject'
             const details = item.details || {};
 
@@ -275,29 +382,47 @@ export class VideoRenderer {
                 element.style.justifyContent = 'center';
                 element.style.textAlign = 'center';
             } else if (item.type === 'image') {
-                const mediaElement = document.createElement('img');
-                mediaElement.src = details.src;
-                mediaElement.style.width = '100%';
-                mediaElement.style.height = '100%';
-                mediaElement.style.objectFit = 'cover';
-                element.appendChild(mediaElement);
+                // Only create image element if it doesn't exist
+                let mediaElement = element.querySelector('img');
+                if (!mediaElement) {
+                    mediaElement = document.createElement('img');
+                    mediaElement.style.width = '100%';
+                    mediaElement.style.height = '100%';
+                    mediaElement.style.objectFit = 'cover';
+                    element.appendChild(mediaElement);
+                }
+
+                // Update src only if changed to prevent reloading
+                if (mediaElement.src !== details.src) {
+                    mediaElement.src = details.src;
+                }
             } else if (item.type === 'video') {
-                const mediaElement = document.createElement('video');
-                mediaElement.src = details.src;
-                mediaElement.style.width = '100%';
-                mediaElement.style.height = '100%';
-                mediaElement.style.objectFit = 'cover';
-                mediaElement.muted = true;
+                // Only create video element if it doesn't exist
+                let mediaElement = element.querySelector('video');
+                if (!mediaElement) {
+                    mediaElement = document.createElement('video');
+                    mediaElement.style.width = '100%';
+                    mediaElement.style.height = '100%';
+                    mediaElement.style.objectFit = 'cover';
+                    mediaElement.muted = true;
+                    element.appendChild(mediaElement);
+                }
+
+                // Update src only if changed
+                if (mediaElement.src !== details.src) {
+                    mediaElement.src = details.src;
+                }
 
                 // Set video time based on current frame time and trim settings
                 const videoTime = (currentTime - (item.display?.from || 0)) / 1000;
                 const trimStart = (item.trim?.from || 0) / 1000;
-                mediaElement.currentTime = trimStart + videoTime;
+                const targetTime = trimStart + videoTime;
 
-                element.appendChild(mediaElement);
+                // Only seek if time difference is significant (prevents constant seeking)
+                if (Math.abs(mediaElement.currentTime - targetTime) > 0.1) {
+                    mediaElement.currentTime = targetTime;
+                }
             }
-
-            canvas.appendChild(element);
         }
         
         // Initialize
