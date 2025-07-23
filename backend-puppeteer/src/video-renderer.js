@@ -218,6 +218,8 @@ export class VideoRenderer {
             -webkit-backface-visibility: hidden;
             /* Ensure smooth transitions */
             transition: opacity 0.1s ease-out;
+            /* Ensure no default border radius */
+            border-radius: 0px;
         }
         .video-item video,
         .video-item img {
@@ -230,6 +232,8 @@ export class VideoRenderer {
             /* Smooth scaling and rendering */
             image-rendering: -webkit-optimize-contrast;
             image-rendering: crisp-edges;
+            /* Ensure no default border radius */
+            border-radius: 0px;
         }
         .text-item {
             position: absolute;
@@ -360,11 +364,63 @@ export class VideoRenderer {
                 element.style.transform = details.transform;
             }
 
+            // Apply border radius using the exact same formula as frontend
+            // Frontend formula: Math.min(width, height) * (borderRadius / 100) + 'px'
+            if (details.borderRadius !== undefined) {
+                const borderRadiusValue = details.borderRadius || 0;
+                const borderRadiusPx = Math.min(width, height) * (borderRadiusValue / 100);
+                element.style.borderRadius = borderRadiusPx + 'px';
+            }
+
+            // Apply border properties
+            if (details.border) {
+                element.style.border = details.border;
+            }
+            if (details.borderWidth !== undefined) {
+                element.style.borderWidth = typeof details.borderWidth === 'number'
+                    ? details.borderWidth + 'px'
+                    : details.borderWidth;
+            }
+            if (details.borderColor) {
+                element.style.borderColor = details.borderColor;
+            }
+            if (details.borderStyle) {
+                element.style.borderStyle = details.borderStyle;
+            }
+
+            // Apply box shadow
+            if (details.boxShadow) {
+                element.style.boxShadow = details.boxShadow;
+            }
+
+            // Apply background properties
+            if (details.backgroundColor) {
+                element.style.backgroundColor = details.backgroundColor;
+            }
+            if (details.background) {
+                element.style.background = details.background;
+            }
+
             // Apply effects
             let filters = [];
             if (details.blur) filters.push(\`blur(\${details.blur}px)\`);
             if (details.brightness !== undefined && details.brightness !== 100) {
                 filters.push(\`brightness(\${details.brightness}%)\`);
+            }
+            if (details.contrast !== undefined && details.contrast !== 100) {
+                filters.push(\`contrast(\${details.contrast}%)\`);
+            }
+            if (details.saturate !== undefined && details.saturate !== 100) {
+                filters.push(\`saturate(\${details.saturate}%)\`);
+            }
+            if (details.hueRotate !== undefined && details.hueRotate !== 0) {
+                filters.push(\`hue-rotate(\${details.hueRotate}deg)\`);
+            }
+            if (details.sepia !== undefined && details.sepia !== 0) {
+                filters.push(\`sepia(\${details.sepia}%)\`);
+            }
+            if (details.grayscale !== undefined && details.grayscale !== 0) {
+                filters.push(\`grayscale(\${details.grayscale}%)\`);
             }
             if (filters.length > 0) {
                 element.style.filter = filters.join(' ');
@@ -380,7 +436,41 @@ export class VideoRenderer {
                 element.style.display = 'flex';
                 element.style.alignItems = 'center';
                 element.style.justifyContent = 'center';
-                element.style.textAlign = 'center';
+                element.style.textAlign = details.textAlign || 'center';
+
+                // Additional text styling properties
+                if (details.fontStyle) {
+                    element.style.fontStyle = details.fontStyle;
+                }
+                if (details.textDecoration) {
+                    element.style.textDecoration = details.textDecoration;
+                }
+                if (details.lineHeight !== undefined) {
+                    element.style.lineHeight = typeof details.lineHeight === 'number'
+                        ? details.lineHeight
+                        : details.lineHeight;
+                }
+                if (details.letterSpacing !== undefined) {
+                    element.style.letterSpacing = typeof details.letterSpacing === 'number'
+                        ? details.letterSpacing + 'px'
+                        : details.letterSpacing;
+                }
+                if (details.textShadow) {
+                    element.style.textShadow = details.textShadow;
+                }
+                if (details.wordSpacing !== undefined) {
+                    element.style.wordSpacing = typeof details.wordSpacing === 'number'
+                        ? details.wordSpacing + 'px'
+                        : details.wordSpacing;
+                }
+
+                // Text alignment within the container
+                if (details.justifyContent) {
+                    element.style.justifyContent = details.justifyContent;
+                }
+                if (details.alignItems) {
+                    element.style.alignItems = details.alignItems;
+                }
             } else if (item.type === 'image') {
                 // Only create image element if it doesn't exist
                 let mediaElement = element.querySelector('img');
@@ -396,6 +486,20 @@ export class VideoRenderer {
                 if (mediaElement.src !== details.src) {
                     mediaElement.src = details.src;
                 }
+
+                // Apply border radius to the image element using the exact same formula as frontend
+                // Frontend formula: Math.min(width, height) * (borderRadius / 100) + 'px'
+                if (details.borderRadius !== undefined) {
+                    const borderRadiusValue = details.borderRadius || 0;
+                    const borderRadiusPx = Math.min(width, height) * (borderRadiusValue / 100);
+                    mediaElement.style.borderRadius = borderRadiusPx + 'px';
+                }
+
+                // Apply object fit if specified
+                if (details.objectFit) {
+                    mediaElement.style.objectFit = details.objectFit;
+                }
+
             } else if (item.type === 'video') {
                 // Only create video element if it doesn't exist
                 let mediaElement = element.querySelector('video');
@@ -411,6 +515,19 @@ export class VideoRenderer {
                 // Update src only if changed
                 if (mediaElement.src !== details.src) {
                     mediaElement.src = details.src;
+                }
+
+                // Apply border radius to the video element using the exact same formula as frontend
+                // Frontend formula: Math.min(width, height) * (borderRadius / 100) + 'px'
+                if (details.borderRadius !== undefined) {
+                    const borderRadiusValue = details.borderRadius || 0;
+                    const borderRadiusPx = Math.min(width, height) * (borderRadiusValue / 100);
+                    mediaElement.style.borderRadius = borderRadiusPx + 'px';
+                }
+
+                // Apply object fit if specified
+                if (details.objectFit) {
+                    mediaElement.style.objectFit = details.objectFit;
                 }
 
                 // Set video time based on current frame time and trim settings
