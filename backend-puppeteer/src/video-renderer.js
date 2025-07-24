@@ -359,21 +359,10 @@ export class VideoRenderer {
                 element.style.opacity = details.opacity / 100;
             }
 
-            // Apply transform using the exact same formula as frontend
-            // Frontend combines transform string with flip transforms
-            let transform = details.transform || '';
-
-            // Add flip transforms (frontend uses scaleX(-1) and scaleY(-1))
-            if (details.flipX) {
-                transform += ' scaleX(-1)';
-            }
-            if (details.flipY) {
-                transform += ' scaleY(-1)';
-            }
-
-            // Apply the combined transform
-            if (transform.trim()) {
-                element.style.transform = transform.trim();
+            // Apply transform (excluding flip - flip is handled separately)
+            // Frontend applies transform to outer element, flip to inner element
+            if (details.transform) {
+                element.style.transform = details.transform;
             }
 
             // Apply border radius using the exact same formula as frontend
@@ -491,27 +480,40 @@ export class VideoRenderer {
                     element.style.alignItems = details.alignItems;
                 }
             } else if (item.type === 'image') {
+                // Create wrapper structure like frontend: outer element (shadow) + inner wrapper (flip) + image
+                let innerWrapper = element.querySelector('.flip-wrapper');
+                if (!innerWrapper) {
+                    innerWrapper = document.createElement('div');
+                    innerWrapper.className = 'flip-wrapper';
+                    innerWrapper.style.width = width + 'px';
+                    innerWrapper.style.height = height + 'px';
+                    innerWrapper.style.position = 'relative';
+                    innerWrapper.style.overflow = 'hidden';
+                    innerWrapper.style.pointerEvents = 'none';
+                    element.appendChild(innerWrapper);
+                }
+
+                // Apply flip transforms to inner wrapper (frontend uses scale property)
+                const scaleX = details.flipX ? '-1' : '1';
+                const scaleY = details.flipY ? '-1' : '1';
+                innerWrapper.style.scale = scaleX + ' ' + scaleY;
+
                 // Only create image element if it doesn't exist
-                let mediaElement = element.querySelector('img');
+                let mediaElement = innerWrapper.querySelector('img');
                 if (!mediaElement) {
                     mediaElement = document.createElement('img');
                     mediaElement.style.width = '100%';
                     mediaElement.style.height = '100%';
                     mediaElement.style.objectFit = 'cover';
-                    element.appendChild(mediaElement);
+                    mediaElement.style.position = 'absolute';
+                    mediaElement.style.top = '0';
+                    mediaElement.style.left = '0';
+                    innerWrapper.appendChild(mediaElement);
                 }
 
                 // Update src only if changed to prevent reloading
                 if (mediaElement.src !== details.src) {
                     mediaElement.src = details.src;
-                }
-
-                // Apply border radius to the image element using the exact same formula as frontend
-                // Frontend formula: Math.min(width, height) * (borderRadius / 100) + 'px'
-                if (details.borderRadius !== undefined) {
-                    const borderRadiusValue = details.borderRadius || 0;
-                    const borderRadiusPx = Math.min(width, height) * (borderRadiusValue / 100);
-                    mediaElement.style.borderRadius = borderRadiusPx + 'px';
                 }
 
                 // Apply object fit if specified
@@ -520,28 +522,41 @@ export class VideoRenderer {
                 }
 
             } else if (item.type === 'video') {
+                // Create wrapper structure like frontend: outer element (shadow) + inner wrapper (flip) + video
+                let innerWrapper = element.querySelector('.flip-wrapper');
+                if (!innerWrapper) {
+                    innerWrapper = document.createElement('div');
+                    innerWrapper.className = 'flip-wrapper';
+                    innerWrapper.style.width = width + 'px';
+                    innerWrapper.style.height = height + 'px';
+                    innerWrapper.style.position = 'relative';
+                    innerWrapper.style.overflow = 'hidden';
+                    innerWrapper.style.pointerEvents = 'none';
+                    element.appendChild(innerWrapper);
+                }
+
+                // Apply flip transforms to inner wrapper (frontend uses scale property)
+                const scaleX = details.flipX ? '-1' : '1';
+                const scaleY = details.flipY ? '-1' : '1';
+                innerWrapper.style.scale = scaleX + ' ' + scaleY;
+
                 // Only create video element if it doesn't exist
-                let mediaElement = element.querySelector('video');
+                let mediaElement = innerWrapper.querySelector('video');
                 if (!mediaElement) {
                     mediaElement = document.createElement('video');
                     mediaElement.style.width = '100%';
                     mediaElement.style.height = '100%';
                     mediaElement.style.objectFit = 'cover';
+                    mediaElement.style.position = 'absolute';
+                    mediaElement.style.top = '0';
+                    mediaElement.style.left = '0';
                     mediaElement.muted = true;
-                    element.appendChild(mediaElement);
+                    innerWrapper.appendChild(mediaElement);
                 }
 
                 // Update src only if changed
                 if (mediaElement.src !== details.src) {
                     mediaElement.src = details.src;
-                }
-
-                // Apply border radius to the video element using the exact same formula as frontend
-                // Frontend formula: Math.min(width, height) * (borderRadius / 100) + 'px'
-                if (details.borderRadius !== undefined) {
-                    const borderRadiusValue = details.borderRadius || 0;
-                    const borderRadiusPx = Math.min(width, height) * (borderRadiusValue / 100);
-                    mediaElement.style.borderRadius = borderRadiusPx + 'px';
                 }
 
                 // Apply object fit if specified
