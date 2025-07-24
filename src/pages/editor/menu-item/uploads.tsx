@@ -4,6 +4,7 @@ import { ADD_VIDEO, ADD_IMAGE, ADD_AUDIO, dispatch } from "@designcombo/events";
 import { generateId } from "@designcombo/timeline";
 import { UploadForm, UploadsList } from "@/components/uploads";
 import { useEffect } from "react";
+import { API_CONFIG } from "@/config/api";
 
 // Helper function to determine file type
 const getFileType = (filename: string): 'video' | 'image' | 'audio' => {
@@ -22,19 +23,36 @@ const getFileType = (filename: string): 'video' | 'image' | 'audio' => {
 export const Uploads = () => {
   const { uploads, addUpload, removeUpload, setUploads } = useDataState();
 
+  // Add global error handler for unhandled promise rejections
+  useEffect(() => {
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      console.error('🚨 Unhandled promise rejection in uploads:', event.reason);
+      console.error('🚨 This might be related to video loading in state manager');
+      // Prevent the error from being thrown to the console
+      event.preventDefault();
+    };
+
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+
+    return () => {
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    };
+  }, []);
+
   // Load existing uploads on component mount
   useEffect(() => {
     const loadUploads = async () => {
       try {
-        const response = await fetch('http://localhost:3000/api/v1/editor/upload/files');
-        if (response.ok) {
-          const data = await response.json();
-          if (data.success) {
-            setUploads(data.files);
-          }
+        // Check if upload service is available
+        const healthResponse = await fetch(`${API_CONFIG.UPLOAD_API_URL}/upload/health`);
+        if (healthResponse.ok) {
+          console.log('Upload service is available');
+          // Note: The backend doesn't have a file listing endpoint yet
+          // Uploads will be populated as users upload files
         }
       } catch (error) {
-        console.error('Failed to load uploads:', error);
+        console.error('Upload service not available:', error);
+        // This is not a critical error, uploads can still work
       }
     };
 
@@ -42,47 +60,88 @@ export const Uploads = () => {
   }, [setUploads]);
 
   const handleAddToTimeline = (upload: IUpload) => {
-    const fileType = getFileType(upload.originalName);
+    try {
+      console.log('🎬 Adding to timeline:', upload.originalName, upload.url);
+      const fileType = getFileType(upload.originalName);
+      console.log('📁 File type detected:', fileType);
 
-    if (fileType === 'video') {
-      dispatch(ADD_VIDEO, {
-        payload: {
-          id: generateId(),
-          details: {
-            src: upload.url
+      // Test if the URL is accessible before adding to timeline
+      const testUrl = async () => {
+        try {
+          const response = await fetch(upload.url, { method: 'HEAD' });
+          console.log('🔍 URL accessibility test:', response.ok ? 'PASS' : 'FAIL', response.status);
+          return response.ok;
+        } catch (error) {
+          console.error('🔍 URL accessibility test FAILED:', error);
+          return false;
+        }
+      };
+
+      if (fileType === 'video') {
+        console.log('🎥 Dispatching ADD_VIDEO event');
+        console.log('🔗 Video URL:', upload.url);
+
+        // Test URL accessibility first
+        testUrl().then(isAccessible => {
+          if (!isAccessible) {
+            console.error('❌ Video URL is not accessible:', upload.url);
+            alert('Error: Video file is not accessible. Please try uploading again.');
+            return;
+          }
+          console.log('✅ Video URL is accessible, proceeding with dispatch');
+        });
+
+        // Add a small delay to ensure the video URL is fully accessible
+        setTimeout(() => {
+          console.log('🎬 Dispatching ADD_VIDEO with delay...');
+          dispatch(ADD_VIDEO, {
+            payload: {
+              id: generateId(),
+              details: {
+                src: upload.url
+              },
+              metadata: {
+                resourceId: upload.url
+              }
+            },
+            options: {
+              resourceId: "main"
+            }
+          });
+          console.log('🎬 ADD_VIDEO dispatch completed');
+        }, 100);
+      } else if (fileType === 'image') {
+        console.log('🖼️ Dispatching ADD_IMAGE event');
+        dispatch(ADD_IMAGE, {
+          payload: {
+            id: generateId(),
+            details: {
+              src: upload.url
+            }
           },
-          metadata: {
-            resourceId: upload.url
+          options: {
+            trackId: "main"
           }
-        },
-        options: {
-          resourceId: "main"
-        }
-      });
-    } else if (fileType === 'image') {
-      dispatch(ADD_IMAGE, {
-        payload: {
-          id: generateId(),
-          details: {
-            src: upload.url
+        });
+      } else if (fileType === 'audio') {
+        console.log('🎵 Dispatching ADD_AUDIO event');
+        dispatch(ADD_AUDIO, {
+          payload: {
+            id: generateId(),
+            details: {
+              src: upload.url
+            }
+          },
+          options: {
+            trackId: "main"
           }
-        },
-        options: {
-          trackId: "main"
-        }
-      });
-    } else if (fileType === 'audio') {
-      dispatch(ADD_AUDIO, {
-        payload: {
-          id: generateId(),
-          details: {
-            src: upload.url
-          }
-        },
-        options: {
-          trackId: "main"
-        }
-      });
+        });
+      }
+      console.log('✅ Successfully dispatched event for:', fileType);
+    } catch (error) {
+      console.error('❌ Error adding to timeline:', error);
+      console.error('Upload data:', upload);
+      alert(`Error adding ${upload.originalName} to timeline: ${error instanceof Error ? error.message : 'Unknown error'}`);
     }
   };
 

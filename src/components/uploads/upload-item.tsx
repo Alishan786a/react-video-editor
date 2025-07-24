@@ -319,7 +319,12 @@ export const UploadItem = ({ upload, onAddToTimeline, onRemove }: UploadItemProp
         className="cursor-pointer hover:bg-secondary/50 transition-colors"
         title={`${upload.originalName} - Click to add to timeline`}
       >
-        <div onClick={onAddToTimeline} className="p-2">
+        <div onClick={(e) => {
+          console.log('🖱️ Upload item clicked:', upload.originalName);
+          e.preventDefault();
+          e.stopPropagation();
+          onAddToTimeline();
+        }} className="p-2">
           <div className="w-full h-20 bg-secondary/30 rounded-sm mb-2 flex items-center justify-center relative overflow-hidden">
             {previewUrl ? (
               <>
@@ -342,7 +347,7 @@ export const UploadItem = ({ upload, onAddToTimeline, onRemove }: UploadItemProp
                     />
                     <div className="absolute inset-0 flex items-center justify-center bg-black/20">
                       <div className="flex flex-col items-center gap-1">
-                        <Play size={20} className="text-white drop-shadow-lg" onClick={toggleVideoPreview}/>
+                        <Play size={20} className="text-white drop-shadow-lg" onClick={(e) => { e.stopPropagation(); toggleVideoPreview(); }}/>
                       </div>
                     </div>
                     {videoDuration && (
@@ -377,7 +382,7 @@ export const UploadItem = ({ upload, onAddToTimeline, onRemove }: UploadItemProp
                     className="absolute inset-0 flex items-center justify-center rounded-sm transition-colors opacity-100"
                     title="Play audio"
                   >
-                    <Play size={20} className="text-white" onClick={toggleAudioPreview}/>
+                    <Play size={20} className="text-white" onClick={(e) => { e.stopPropagation(); toggleAudioPreview(); }}/>
                   </div>
                 )}
               </div>
