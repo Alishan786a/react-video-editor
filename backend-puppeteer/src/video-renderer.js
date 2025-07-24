@@ -67,9 +67,72 @@ export class VideoRenderer {
       
       // Wait for React to initialize
       await page.waitForFunction(() => window.videoEditorReady === true, { timeout: 10000 });
-      
-      this.updateProgress(renderJobs, renderId, 20, 'React app loaded, starting frame capture...');
-      
+
+      this.updateProgress(renderJobs, renderId, 20, 'React app loaded, preloading videos...');
+
+      // Preload all videos to prevent black screen at start
+      await page.evaluate(async () => {
+        const videos = Array.from(document.querySelectorAll('video'));
+        if (videos.length > 0) {
+          console.log(`Preloading ${videos.length} video(s)...`);
+
+          // Wait for all videos to load enough data
+          await Promise.all(videos.map(video => {
+            return new Promise(resolve => {
+              if (video.readyState >= 3) { // HAVE_FUTURE_DATA
+                console.log('Video already loaded');
+                resolve();
+                return;
+              }
+
+              const onCanPlay = () => {
+                console.log('Video can play');
+                video.removeEventListener('canplay', onCanPlay);
+                video.removeEventListener('loadeddata', onLoadedData);
+                resolve();
+              };
+
+              const onLoadedData = () => {
+                if (video.readyState >= 2) { // HAVE_CURRENT_DATA
+                  console.log('Video data loaded');
+                  video.removeEventListener('canplay', onCanPlay);
+                  video.removeEventListener('loadeddata', onLoadedData);
+                  resolve();
+                }
+              };
+
+              video.addEventListener('canplay', onCanPlay);
+              video.addEventListener('loadeddata', onLoadedData);
+
+              // Force load if not already loading
+              if (video.readyState === 0) {
+                console.log('Force loading video');
+                video.load();
+              }
+
+              // Timeout fallback
+              setTimeout(() => {
+                console.log('Video preload timeout');
+                video.removeEventListener('canplay', onCanPlay);
+                video.removeEventListener('loadeddata', onLoadedData);
+                resolve();
+              }, 5000);
+            });
+          }));
+
+          console.log('All videos preloaded successfully');
+
+          // Ensure all videos start at time 0
+          videos.forEach(video => {
+            video.currentTime = 0;
+          });
+
+          console.log('All videos reset to start time');
+        }
+      });
+
+      this.updateProgress(renderJobs, renderId, 20, 'Videos preloaded, starting frame capture...');
+
       // Calculate video parameters
       const fps = projectData.fps || 30;
       const duration = this.calculateDuration(projectData);
@@ -81,65 +144,120 @@ export class VideoRenderer {
       const framesDir = path.join(__dirname, '..', 'storage', 'temp', `frames_${renderId}`);
       await fs.ensureDir(framesDir);
       
-      // Capture frames with improved stability
+      // Capture frames with optimized timing for smooth video
       for (let frame = 0; frame < totalFrames; frame++) {
-        const timeMs = (frame / fps) * 1000;
+        // Use precise frame timing for smooth playback
+        const timeMs = Math.round((frame / fps) * 1000 * 100) / 100; // Round to 2 decimal places
 
-        // Set current frame time and wait for rendering to complete
+        // Set current frame time with improved synchronization
         await page.evaluate((time) => {
           if (window.setFrame) {
             window.setFrame(time);
           }
-          // Force a repaint to ensure rendering is complete
-          if (window.requestAnimationFrame) {
-            return new Promise(resolve => {
+
+          // Enhanced frame synchronization for smoother video
+          return new Promise(resolve => {
+            // Wait for multiple animation frames to ensure stability
+            window.requestAnimationFrame(() => {
               window.requestAnimationFrame(() => {
-                window.requestAnimationFrame(resolve);
+                window.requestAnimationFrame(() => {
+                  // Force layout recalculation
+                  document.body.offsetHeight;
+                  resolve();
+                });
               });
             });
-          }
+          });
         }, timeMs);
 
-        // Wait longer for rendering to stabilize (especially for videos and animations)
-        await page.waitForTimeout(200);
+        // For the first frame, give extra time to ensure video is properly loaded
+        if (frame === 0) {
+          await page.waitForTimeout(200); // Extra wait for first frame
+        } else {
+          await page.waitForTimeout(50); // Normal wait for other frames
+        }
 
-        // Wait for any images or videos to load
+        // Optimized waiting for smoother video rendering
+        await page.waitForTimeout(50); // Reduced from 200ms to 50ms
+
+        // Wait for media elements to be ready and videos to seek properly
         await page.evaluate(() => {
           return Promise.all([
+            // Wait for images to load
             ...Array.from(document.querySelectorAll('img')).map(img => {
               if (img.complete) return Promise.resolve();
               return new Promise(resolve => {
                 img.onload = resolve;
                 img.onerror = resolve;
-                setTimeout(resolve, 1000); // Timeout after 1s
+                setTimeout(resolve, 500);
               });
             }),
+            // Wait for videos to be ready and properly seeked
             ...Array.from(document.querySelectorAll('video')).map(video => {
-              if (video.readyState >= 2) return Promise.resolve();
               return new Promise(resolve => {
-                video.onloadeddata = resolve;
-                video.onerror = resolve;
-                setTimeout(resolve, 1000); // Timeout after 1s
+                const targetTime = parseFloat(video.dataset.targetTime || '0');
+
+                // Check if video is ready and at the correct time
+                const isReady = video.readyState >= 2; // HAVE_CURRENT_DATA
+                const isAtCorrectTime = Math.abs(video.currentTime - targetTime) < 0.1;
+
+                if (isReady && isAtCorrectTime) {
+                  resolve();
+                  return;
+                }
+
+                // Wait for video to seek to correct time
+                const onSeeked = () => {
+                  video.removeEventListener('seeked', onSeeked);
+                  video.removeEventListener('loadeddata', onLoadedData);
+                  resolve();
+                };
+
+                const onLoadedData = () => {
+                  if (video.readyState >= 2) {
+                    video.removeEventListener('seeked', onSeeked);
+                    video.removeEventListener('loadeddata', onLoadedData);
+                    resolve();
+                  }
+                };
+
+                video.addEventListener('seeked', onSeeked);
+                video.addEventListener('loadeddata', onLoadedData);
+
+                // Force seek if needed
+                if (Math.abs(video.currentTime - targetTime) > 0.1) {
+                  video.currentTime = targetTime;
+                }
+
+                // Timeout fallback
+                setTimeout(() => {
+                  video.removeEventListener('seeked', onSeeked);
+                  video.removeEventListener('loadeddata', onLoadedData);
+                  resolve();
+                }, 1000);
               });
             })
           ]);
         });
 
-        // Additional wait to ensure everything is rendered
-        await page.waitForTimeout(100);
+        // Minimal additional wait for final rendering
+        await page.waitForTimeout(25); // Reduced from 100ms to 25ms
 
-        // Capture screenshot
+        // Capture screenshot with optimized settings for smooth video
         const framePath = path.join(framesDir, `${frame.toString().padStart(6, '0')}.png`);
         await page.screenshot({
           path: framePath,
           type: 'png',
+          // Note: PNG doesn't support quality setting, it's lossless by default
           clip: {
             x: 0,
             y: 0,
             width: projectData.size?.width || 1080,
             height: projectData.size?.height || 1920
           },
-          omitBackground: false // Ensure background is included
+          omitBackground: false,
+          optimizeForSpeed: false, // Prioritize quality over speed
+          captureBeyondViewport: false // Ensure consistent framing
         });
 
         // Update progress
@@ -551,12 +669,18 @@ export class VideoRenderer {
                     mediaElement.style.top = '0';
                     mediaElement.style.left = '0';
                     mediaElement.muted = true;
+                    mediaElement.preload = 'metadata'; // Preload metadata for seeking
+                    mediaElement.playsInline = true; // Ensure inline playback
+                    mediaElement.crossOrigin = 'anonymous'; // Handle CORS if needed
                     innerWrapper.appendChild(mediaElement);
                 }
 
-                // Update src only if changed
+                // Update src only if changed and ensure video loads
                 if (mediaElement.src !== details.src) {
                     mediaElement.src = details.src;
+                    // Force load the video and reset to start
+                    mediaElement.load();
+                    mediaElement.currentTime = 0;
                 }
 
                 // Apply object fit if specified
@@ -567,12 +691,13 @@ export class VideoRenderer {
                 // Set video time based on current frame time and trim settings
                 const videoTime = (currentTime - (item.display?.from || 0)) / 1000;
                 const trimStart = (item.trim?.from || 0) / 1000;
-                const targetTime = trimStart + videoTime;
+                const targetTime = Math.max(0, trimStart + videoTime);
 
-                // Only seek if time difference is significant (prevents constant seeking)
-                if (Math.abs(mediaElement.currentTime - targetTime) > 0.1) {
-                    mediaElement.currentTime = targetTime;
-                }
+                // Always update video time for proper frame display
+                mediaElement.currentTime = targetTime;
+
+                // Store the target time for verification
+                mediaElement.dataset.targetTime = targetTime.toString();
             }
         }
         
@@ -611,15 +736,27 @@ export class VideoRenderer {
 
         console.log(`🎬 Starting FFmpeg with ${videoDurationSeconds}s duration`);
 
-        // Create FFmpeg command for video
+        // Create FFmpeg command for video with optimized settings for smoothness
         let command = ffmpeg()
           .input(path.join(framesDir, '%06d.png'))
           .inputFPS(fps)
           .videoCodec('libx264')
           .outputOptions([
             '-pix_fmt yuv420p',
-            '-preset fast',
-            '-crf 23'
+            '-preset medium', // Better quality than 'fast'
+            '-crf 18', // Higher quality (lower CRF = better quality)
+            '-movflags +faststart', // Optimize for web playback
+            '-profile:v high', // H.264 high profile for better compression
+            '-level 4.0', // H.264 level for compatibility
+            '-bf 2', // B-frames for better compression
+            '-g ' + (fps * 2), // GOP size (keyframe interval)
+            '-keyint_min ' + fps, // Minimum keyframe interval
+            '-sc_threshold 0', // Disable scene change detection
+            '-force_key_frames expr:gte(t,n_forced*2)', // Force keyframes every 2 seconds
+            '-vsync cfr', // Constant frame rate for smooth playback
+            '-r ' + fps, // Explicit output frame rate
+            '-fflags +genpts', // Generate presentation timestamps
+            '-avoid_negative_ts make_zero' // Handle timestamp issues
           ])
           .fps(fps);
 
