@@ -359,9 +359,21 @@ export class VideoRenderer {
                 element.style.opacity = details.opacity / 100;
             }
 
-            // Apply transform (your frontend uses transform strings like "scale(0.84375)")
-            if (details.transform) {
-                element.style.transform = details.transform;
+            // Apply transform using the exact same formula as frontend
+            // Frontend combines transform string with flip transforms
+            let transform = details.transform || '';
+
+            // Add flip transforms (frontend uses scaleX(-1) and scaleY(-1))
+            if (details.flipX) {
+                transform += ' scaleX(-1)';
+            }
+            if (details.flipY) {
+                transform += ' scaleY(-1)';
+            }
+
+            // Apply the combined transform
+            if (transform.trim()) {
+                element.style.transform = transform.trim();
             }
 
             // Apply border radius using the exact same formula as frontend
