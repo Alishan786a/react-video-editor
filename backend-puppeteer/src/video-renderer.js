@@ -477,10 +477,38 @@ export class VideoRenderer {
                 element.style.opacity = details.opacity / 100;
             }
 
-            // Apply transform (excluding flip - flip is handled separately)
-            // Frontend applies transform to outer element, flip to inner element
+            // Apply transform (including rotation from nested details.details.transform)
+            // Frontend stores rotation in details.details.transform and scale in details.transform
+            let finalTransform = '';
+
+            // Extract rotation from nested transform if it exists
+            let rotationPart = '';
+            if (details.details && details.details.transform) {
+                // Extract only the rotation part from nested transform
+                const rotateMatch = details.details.transform.match(/rotate\([^)]+\)/);
+                if (rotateMatch) {
+                    rotationPart = rotateMatch[0];
+                }
+            }
+
+            // Use main transform (usually scale) as the base
             if (details.transform) {
-                element.style.transform = details.transform;
+                finalTransform = details.transform;
+            }
+
+            // Add rotation if found
+            if (rotationPart) {
+                if (finalTransform) {
+                    finalTransform += ' ' + rotationPart;
+                } else {
+                    finalTransform = rotationPart;
+                }
+            }
+
+            // Apply the combined transform
+            if (finalTransform) {
+                element.style.transform = finalTransform;
+                console.log('🔄 Applied transform to ' + item.id + ': ' + finalTransform);
             }
 
             // Apply border radius using the exact same formula as frontend
