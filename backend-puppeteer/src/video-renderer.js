@@ -623,7 +623,7 @@ export class VideoRenderer {
           ])
           .fps(fps);
 
-        // Process audio tracks
+        // Process both audio tracks AND video tracks with audio
         const audioItems = projectData.trackItemIds
           .map(id => {
             const itemDetails = projectData.trackItemDetailsMap[id];
@@ -631,62 +631,81 @@ export class VideoRenderer {
             return itemDetails && trackItem && itemDetails.type === 'audio' ? {
               details: itemDetails.details,
               display: trackItem.display,
-              trim: trackItem.trim || {}
+              trim: trackItem.trim || {},
+              type: 'audio'
             } : null;
           })
           .filter(item => item !== null);
 
-        console.log(`🎵 Found ${audioItems.length} audio track(s)`);
+        // Also extract audio from video items
+        const videoItemsWithAudio = projectData.trackItemIds
+          .map(id => {
+            const itemDetails = projectData.trackItemDetailsMap[id];
+            const trackItem = projectData.trackItemsMap[id];
+            return itemDetails && trackItem && itemDetails.type === 'video' ? {
+              details: itemDetails.details,
+              display: trackItem.display,
+              trim: trackItem.trim || {},
+              type: 'video'
+            } : null;
+          })
+          .filter(item => item !== null);
 
-        if (audioItems.length > 0) {
-          // Process audio using the exact same approach as backend-custom
-          const audioItem = audioItems[0];
-          const audioSrc = audioItem.details.src;
+        console.log(`🎵 Found ${audioItems.length} audio track(s) and ${videoItemsWithAudio.length} video(s) with potential audio`);
+
+        // Handle audio from both audio tracks and video files
+        const allAudioSources = [...audioItems, ...videoItemsWithAudio];
+
+        if (allAudioSources.length > 0) {
+          console.log(`🎵 Processing ${allAudioSources.length} audio source(s)...`);
+
+          // For now, handle the simple case of one audio source (most common)
+          const firstAudioSource = allAudioSources[0];
+          const audioSrc = firstAudioSource.details.src;
 
           if (audioSrc) {
-            console.log(`🎵 Adding audio: ${audioSrc}`);
+            console.log(`🎵 Adding ${firstAudioSource.type} audio: ${audioSrc}`);
 
-            // Use fluent-ffmpeg's built-in methods like backend-custom does
+            // Add the audio input
             command = command.input(audioSrc);
 
-            // Extract audio properties like backend-custom
-            const volume = this.extractVolume(audioItem.details);
-            const timing = audioItem.display || {};
-            const trim = audioItem.trim || {};
+            // Extract audio properties
+            const volume = this.extractVolume(firstAudioSource.details);
+            const timing = firstAudioSource.display || {};
+            const trim = firstAudioSource.trim || {};
 
             const startTime = (timing.from || 0) / 1000;
             const endTime = (timing.to || duration) / 1000;
-            const layerDuration = endTime - startTime;
 
-            console.log(`🎵 Audio properties: volume=${volume}, startTime=${startTime}s, duration=${layerDuration}s`);
+            console.log(`🎵 ${firstAudioSource.type} properties: volume=${volume}, startTime=${startTime}s`);
             console.log(`🎵 Trim settings: from=${trim.from || 0}ms, to=${trim.to || 'end'}`);
 
-            // Apply trimming using seekInput and duration like backend-custom
+            // Apply audio processing
+            const audioFilters = [];
+
+            // Apply trimming if needed
             if (trim.from !== undefined) {
-              command = command.seekInput(trim.from / 1000);
+              const trimStart = trim.from / 1000;
+              command = command.seekInput(trimStart);
+              console.log(`🎵 Seeking audio to ${trimStart}s`);
             }
 
-            if (trim.to !== undefined) {
-              const trimDuration = (trim.to - (trim.from || 0)) / 1000;
-              command = command.inputOptions([`-t`, trimDuration.toString()]);
-            }
-
-            // Build audio filter chain for volume and delay
-            const filters = [];
-
-            // Volume adjustment
+            // Apply volume if not default
             if (volume !== 1) {
-              filters.push(`volume=${volume}`);
+              audioFilters.push(`volume=${volume}`);
+              console.log(`🎵 Applying volume: ${volume}`);
             }
 
-            // Apply delay for display timing (if audio should start later)
+            // Apply delay for display timing
             if (startTime > 0) {
-              filters.push(`adelay=${Math.floor(startTime * 1000)}|${Math.floor(startTime * 1000)}`);
+              const delayMs = Math.floor(startTime * 1000);
+              audioFilters.push(`adelay=${delayMs}|${delayMs}`);
+              console.log(`🎵 Applying delay: ${delayMs}ms`);
             }
 
-            // Apply filters if any
-            if (filters.length > 0) {
-              command = command.audioFilters(filters);
+            // Apply audio filters if any
+            if (audioFilters.length > 0) {
+              command = command.audioFilters(audioFilters);
             }
 
             // Set audio codec and quality
@@ -695,9 +714,17 @@ export class VideoRenderer {
               .audioBitrate('128k')
               .audioChannels(2)
               .audioFrequency(44100);
+
+            console.log('🎵 Audio processing configured successfully');
           }
+
+          // TODO: Handle multiple audio sources with mixing in the future
+          if (allAudioSources.length > 1) {
+            console.log('⚠️ Multiple audio sources detected, only using the first one for now');
+          }
+
         } else {
-          console.log('🔇 No audio tracks found, creating video without audio');
+          console.log('🔇 No audio sources found, creating video without audio');
         }
 
         // Set video duration to match calculated duration
