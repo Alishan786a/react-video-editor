@@ -371,6 +371,9 @@ export class VideoRenderer {
             /* Ensure smooth transitions */
             transition: opacity 0.1s ease-out;
         }
+
+        /* Font loading CSS */
+        ${this.generateFontCSS(projectData)}
     </style>
 </head>
 <body>
@@ -379,8 +382,42 @@ export class VideoRenderer {
     <script>
         let currentTime = 0;
         const projectData = ${JSON.stringify(projectData)};
-        
+
         window.videoEditorReady = false;
+
+        // Font parsing function for browser context
+        function parseFontName(postScriptName) {
+            if (!postScriptName) {
+                return { family: 'Arial', weight: 'normal', style: 'normal' };
+            }
+
+            // Split by last dash to separate family from style
+            const lastDashIndex = postScriptName.lastIndexOf('-');
+            if (lastDashIndex === -1) {
+                return { family: postScriptName, weight: 'normal', style: 'normal' };
+            }
+
+            const family = postScriptName.substring(0, lastDashIndex);
+            const styleString = postScriptName.substring(lastDashIndex + 1).toLowerCase();
+
+            // Determine if italic
+            const isItalic = styleString.includes('italic');
+            const style = isItalic ? 'italic' : 'normal';
+
+            // Determine weight
+            let weight = 'normal';
+            if (styleString.includes('thin')) weight = '100';
+            else if (styleString.includes('extralight') || styleString.includes('ultralight')) weight = '200';
+            else if (styleString.includes('light')) weight = '300';
+            else if (styleString.includes('regular') || styleString.includes('normal')) weight = '400';
+            else if (styleString.includes('medium')) weight = '500';
+            else if (styleString.includes('semibold') || styleString.includes('demibold')) weight = '600';
+            else if (styleString.includes('bold')) weight = '700';
+            else if (styleString.includes('extrabold') || styleString.includes('ultrabold')) weight = '800';
+            else if (styleString.includes('black') || styleString.includes('heavy')) weight = '900';
+
+            return { family, weight, style };
+        }
         
         function setFrame(timeMs) {
             currentTime = timeMs;
@@ -521,30 +558,33 @@ export class VideoRenderer {
 
             // Apply outline and shadow using the exact same formula as frontend
             // Frontend combines outline and shadow into a single box-shadow property
-            const boxShadowParts = [];
+            // BUT: For text elements, these should be handled as text effects, not container effects
+            if (item.type !== 'text') {
+                const boxShadowParts = [];
 
-            // Add outline (border) as box-shadow: "0 0 0 [borderWidth]px [borderColor]"
-            if (details.borderWidth && details.borderWidth > 0) {
-                const borderWidth = details.borderWidth;
-                const borderColor = details.borderColor || '#000000';
-                boxShadowParts.push('0 0 0 ' + borderWidth + 'px ' + borderColor);
-            }
+                // Add outline (border) as box-shadow: "0 0 0 [borderWidth]px [borderColor]"
+                if (details.borderWidth && details.borderWidth > 0) {
+                    const borderWidth = details.borderWidth;
+                    const borderColor = details.borderColor || '#000000';
+                    boxShadowParts.push('0 0 0 ' + borderWidth + 'px ' + borderColor);
+                }
 
-            // Add shadow: "[x]px [y]px [blur]px [color]"
-            if (details.boxShadow && (details.boxShadow.x !== 0 || details.boxShadow.y !== 0 || details.boxShadow.blur !== 0)) {
-                const shadow = details.boxShadow;
-                const x = shadow.x || 0;
-                const y = shadow.y || 0;
-                const blur = shadow.blur || 0;
-                const color = shadow.color || '#000000';
-                boxShadowParts.push(x + 'px ' + y + 'px ' + blur + 'px ' + color);
-            }
+                // Add shadow: "[x]px [y]px [blur]px [color]"
+                if (details.boxShadow && (details.boxShadow.x !== 0 || details.boxShadow.y !== 0 || details.boxShadow.blur !== 0)) {
+                    const shadow = details.boxShadow;
+                    const x = shadow.x || 0;
+                    const y = shadow.y || 0;
+                    const blur = shadow.blur || 0;
+                    const color = shadow.color || '#000000';
+                    boxShadowParts.push(x + 'px ' + y + 'px ' + blur + 'px ' + color);
+                }
 
-            // Apply combined box-shadow
-            if (boxShadowParts.length > 0) {
-                element.style.boxShadow = boxShadowParts.join(', ');
-            } else {
-                element.style.boxShadow = 'none';
+                // Apply combined box-shadow
+                if (boxShadowParts.length > 0) {
+                    element.style.boxShadow = boxShadowParts.join(', ');
+                } else {
+                    element.style.boxShadow = 'none';
+                }
             }
 
             // Apply background properties
@@ -585,17 +625,26 @@ export class VideoRenderer {
                 element.textContent = details.text || 'Sample Text';
                 element.style.fontSize = (details.fontSize || 24) + 'px';
                 element.style.color = details.color || '#ffffff';
-                element.style.fontFamily = details.fontFamily || 'Arial';
-                element.style.fontWeight = details.fontWeight || 'normal';
+
+                // Parse font family from postScriptName and apply correct font properties
+                if (details.fontFamily) {
+                    const { family, weight, style } = parseFontName(details.fontFamily);
+                    element.style.fontFamily = "'" + family + "', Arial, sans-serif";
+                    element.style.fontWeight = weight;
+                    element.style.fontStyle = style;
+                    console.log('🔤 Applied font: ' + family + ' (weight: ' + weight + ', style: ' + style + ') from ' + details.fontFamily);
+                } else {
+                    element.style.fontFamily = 'Arial, sans-serif';
+                    element.style.fontWeight = details.fontWeight || 'normal';
+                    element.style.fontStyle = details.fontStyle || 'normal';
+                }
+
                 element.style.display = 'flex';
                 element.style.alignItems = 'center';
                 element.style.justifyContent = 'center';
                 element.style.textAlign = details.textAlign || 'center';
 
                 // Additional text styling properties
-                if (details.fontStyle) {
-                    element.style.fontStyle = details.fontStyle;
-                }
                 if (details.textDecoration) {
                     element.style.textDecoration = details.textDecoration;
                 }
@@ -609,13 +658,83 @@ export class VideoRenderer {
                         ? details.letterSpacing + 'px'
                         : details.letterSpacing;
                 }
-                if (details.textShadow) {
-                    element.style.textShadow = details.textShadow;
-                }
                 if (details.wordSpacing !== undefined) {
                     element.style.wordSpacing = typeof details.wordSpacing === 'number'
                         ? details.wordSpacing + 'px'
                         : details.wordSpacing;
+                }
+
+                // Text transform (uppercase, lowercase, capitalize, etc.)
+                if (details.textTransform) {
+                    element.style.textTransform = details.textTransform;
+                }
+
+                // Text stroke (border for text) - Use multiple approaches for better compatibility
+                // Frontend uses WebkitTextStroke, but for thick strokes we need alternative methods
+                if (details.borderWidth && details.borderWidth > 0) {
+                    const strokeWidth = details.borderWidth;
+                    const strokeColor = details.borderColor || '#000000';
+
+                    if (strokeWidth <= 5) {
+                        // For thin strokes, use WebKit text stroke (works well)
+                        element.style.webkitTextStroke = strokeWidth + 'px ' + strokeColor;
+                        element.style.paintOrder = 'stroke fill';
+                    } else {
+                        // For thick strokes, use multiple text-shadow to create outline effect
+                        // This prevents the stroke from overwhelming the text fill
+                        const shadows = [];
+                        const steps = Math.ceil(strokeWidth / 2); // Number of shadow layers
+
+                        // Create multiple shadows in a circle pattern
+                        for (let i = 1; i <= steps; i++) {
+                            const radius = i * 2;
+                            // 8 directions for smooth outline
+                            shadows.push(radius + 'px 0px 0px ' + strokeColor); // right
+                            shadows.push('-' + radius + 'px 0px 0px ' + strokeColor); // left
+                            shadows.push('0px ' + radius + 'px 0px ' + strokeColor); // bottom
+                            shadows.push('0px -' + radius + 'px 0px ' + strokeColor); // top
+                            shadows.push(radius + 'px ' + radius + 'px 0px ' + strokeColor); // bottom-right
+                            shadows.push('-' + radius + 'px ' + radius + 'px 0px ' + strokeColor); // bottom-left
+                            shadows.push(radius + 'px -' + radius + 'px 0px ' + strokeColor); // top-right
+                            shadows.push('-' + radius + 'px -' + radius + 'px 0px ' + strokeColor); // top-left
+                        }
+
+                        element.style.textShadow = shadows.join(', ');
+                        console.log('🔲 Applied thick stroke using text-shadow method: ' + strokeWidth + 'px ' + strokeColor);
+                    }
+
+                    // Ensure text color is properly set and visible
+                    element.style.color = details.color || '#ffffff';
+
+                } else if (details.WebkitTextStrokeWidth && details.WebkitTextStrokeWidth !== '0px') {
+                    // Fallback to individual properties if needed
+                    element.style.webkitTextStrokeWidth = details.WebkitTextStrokeWidth;
+                    element.style.webkitTextStrokeColor = details.WebkitTextStrokeColor || '#000000';
+                    element.style.paintOrder = 'stroke fill';
+                    element.style.color = details.color || '#ffffff';
+                }
+
+                // For text elements, boxShadow should be applied as textShadow
+                // But only if we haven't already applied stroke shadows
+                if (!element.style.textShadow) {
+                    if (details.boxShadow && (details.boxShadow.x !== 0 || details.boxShadow.y !== 0 || details.boxShadow.blur !== 0)) {
+                        const shadow = details.boxShadow;
+                        const x = shadow.x || 0;
+                        const y = shadow.y || 0;
+                        const blur = shadow.blur || 0;
+                        const color = shadow.color || '#000000';
+                        element.style.textShadow = x + 'px ' + y + 'px ' + blur + 'px ' + color;
+                    } else if (details.textShadow) {
+                        element.style.textShadow = details.textShadow;
+                    }
+                } else if (details.boxShadow && (details.boxShadow.x !== 0 || details.boxShadow.y !== 0 || details.boxShadow.blur !== 0)) {
+                    // If we already have stroke shadows, add the drop shadow to them
+                    const shadow = details.boxShadow;
+                    const x = shadow.x || 0;
+                    const y = shadow.y || 0;
+                    const blur = shadow.blur || 0;
+                    const color = shadow.color || '#000000';
+                    element.style.textShadow += ', ' + x + 'px ' + y + 'px ' + blur + 'px ' + color;
                 }
 
                 // Text alignment within the container
@@ -625,6 +744,9 @@ export class VideoRenderer {
                 if (details.alignItems) {
                     element.style.alignItems = details.alignItems;
                 }
+
+                // Override box-shadow for text elements (should not have container shadows)
+                element.style.boxShadow = 'none';
             } else if (item.type === 'image') {
                 // Create wrapper structure like frontend: outer element (shadow) + inner wrapper (flip) + image
                 let innerWrapper = element.querySelector('.flip-wrapper');
@@ -936,6 +1058,80 @@ export class VideoRenderer {
     }
 
     return Math.max(0, Math.min(2, volume)); // Clamp between 0 and 2
+  }
+
+  /**
+   * Generate CSS for loading custom fonts
+   */
+  generateFontCSS(projectData) {
+    const { trackItemDetailsMap, trackItemIds } = projectData;
+    let fontCSS = '';
+    const loadedFonts = new Set(); // Prevent duplicate font loading
+
+    trackItemIds.forEach(itemId => {
+      const item = trackItemDetailsMap[itemId];
+      if (!item || item.type !== 'text') return;
+
+      const details = item.details;
+      if (details.fontUrl && details.fontFamily) {
+        const fontKey = `${details.fontFamily}-${details.fontUrl}`;
+        if (!loadedFonts.has(fontKey)) {
+          loadedFonts.add(fontKey);
+
+          // Parse postScriptName to get family and weight
+          const { family, weight, style } = this.parseFontName(details.fontFamily);
+
+          fontCSS += `
+        @font-face {
+            font-family: '${family}';
+            font-weight: ${weight};
+            font-style: ${style};
+            src: url('${details.fontUrl}') format('truetype');
+            font-display: block;
+        }`;
+        }
+      }
+    });
+
+    return fontCSS;
+  }
+
+  /**
+   * Parse postScriptName to extract font family, weight, and style
+   * Examples: "Roboto-Bold" -> {family: "Roboto", weight: "bold", style: "normal"}
+   *          "Roboto-BoldItalic" -> {family: "Roboto", weight: "bold", style: "italic"}
+   */
+  parseFontName(postScriptName) {
+    if (!postScriptName) {
+      return { family: 'Arial', weight: 'normal', style: 'normal' };
+    }
+
+    // Split by last dash to separate family from style
+    const lastDashIndex = postScriptName.lastIndexOf('-');
+    if (lastDashIndex === -1) {
+      return { family: postScriptName, weight: 'normal', style: 'normal' };
+    }
+
+    const family = postScriptName.substring(0, lastDashIndex);
+    const styleString = postScriptName.substring(lastDashIndex + 1).toLowerCase();
+
+    // Determine if italic
+    const isItalic = styleString.includes('italic');
+    const style = isItalic ? 'italic' : 'normal';
+
+    // Determine weight
+    let weight = 'normal';
+    if (styleString.includes('thin')) weight = '100';
+    else if (styleString.includes('extralight') || styleString.includes('ultralight')) weight = '200';
+    else if (styleString.includes('light')) weight = '300';
+    else if (styleString.includes('regular') || styleString.includes('normal')) weight = '400';
+    else if (styleString.includes('medium')) weight = '500';
+    else if (styleString.includes('semibold') || styleString.includes('demibold')) weight = '600';
+    else if (styleString.includes('bold')) weight = '700';
+    else if (styleString.includes('extrabold') || styleString.includes('ultrabold')) weight = '800';
+    else if (styleString.includes('black') || styleString.includes('heavy')) weight = '900';
+
+    return { family, weight, style };
   }
 
   updateProgress(renderJobs, renderId, progress, message) {
