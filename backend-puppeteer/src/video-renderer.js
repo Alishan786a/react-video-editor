@@ -10,14 +10,16 @@ const __dirname = path.dirname(__filename);
 export class VideoRenderer {
   constructor() {
     this.browser = null;
-    this.page = null;
+    this.pagePool = [];
+    this.maxPoolSize = 3; // Limit concurrent pages
+    this.isShuttingDown = false;
   }
 
   async initializeBrowser() {
-    if (!this.browser) {
-      console.log('🌐 Launching Puppeteer browser...');
+    if (!this.browser || !this.browser.connected) {
+      console.log('🌐 Launching optimized Puppeteer browser...');
       this.browser = await puppeteer.launch({
-        headless: true,
+        headless: 'new', // Use new headless mode for better performance
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -25,42 +27,185 @@ export class VideoRenderer {
           '--disable-accelerated-2d-canvas',
           '--no-first-run',
           '--no-zygote',
-          '--disable-gpu'
-        ]
+          '--disable-gpu',
+          '--disable-background-timer-throttling',
+          '--disable-backgrounding-occluded-windows',
+          '--disable-renderer-backgrounding',
+          '--disable-features=TranslateUI',
+          '--disable-ipc-flooding-protection',
+          '--disable-background-networking',
+          '--disable-default-apps',
+          '--disable-extensions',
+          '--disable-sync',
+          '--disable-translate',
+          '--hide-scrollbars',
+          '--metrics-recording-only',
+          '--mute-audio',
+          '--no-default-browser-check',
+          '--no-pings',
+          '--password-store=basic',
+          '--use-mock-keychain',
+          '--disable-blink-features=AutomationControlled',
+          '--memory-pressure-off'
+        ],
+        defaultViewport: null,
+        ignoreDefaultArgs: ['--enable-automation'],
+        // Optimize for performance
+        pipe: true
+      });
+
+      // Handle browser disconnection
+      this.browser.on('disconnected', () => {
+        console.log('🔌 Browser disconnected, clearing pool');
+        this.browser = null;
+        this.pagePool = [];
       });
     }
     return this.browser;
   }
 
-  async createPage() {
+  async getPage() {
+    // Try to reuse a page from the pool
+    if (this.pagePool.length > 0) {
+      const page = this.pagePool.pop();
+      if (!page.isClosed()) {
+        console.log('♻️ Reusing page from pool');
+        return page;
+      }
+    }
+
+    // Create new page if pool is empty
     const browser = await this.initializeBrowser();
     const page = await browser.newPage();
-    
-    // Set viewport to match video dimensions
+
+    // Optimize page settings for performance
     await page.setViewport({
       width: 1080,
       height: 1920,
       deviceScaleFactor: 1
     });
 
+    // Disable unnecessary features for performance
+    await page.setRequestInterception(false);
+    await page.setCacheEnabled(true);
+
+    // Optimize page settings
+    await page.evaluateOnNewDocument(() => {
+      // Disable animations for faster rendering
+      const style = document.createElement('style');
+      style.textContent = `
+        *, *::before, *::after {
+          animation-duration: 0s !important;
+          animation-delay: 0s !important;
+          transition-duration: 0s !important;
+          transition-delay: 0s !important;
+        }
+      `;
+      document.head.appendChild(style);
+    });
+
+    console.log('🆕 Created new optimized page');
     return page;
+  }
+
+  async returnPage(page) {
+    if (this.isShuttingDown || page.isClosed()) {
+      return;
+    }
+
+    // Clean up page state before returning to pool
+    try {
+      await page.evaluate(() => {
+        // Clear any intervals/timeouts
+        const highestId = setTimeout(() => {}, 0);
+        for (let i = 0; i < highestId; i++) {
+          clearTimeout(i);
+          clearInterval(i);
+        }
+
+        // Clear console
+        if (console.clear) console.clear();
+
+        // Force garbage collection if available
+        if (window.gc) window.gc();
+      });
+
+      // Return to pool if under limit
+      if (this.pagePool.length < this.maxPoolSize) {
+        this.pagePool.push(page);
+        console.log(`📦 Returned page to pool (${this.pagePool.length}/${this.maxPoolSize})`);
+      } else {
+        await page.close();
+        console.log('🗑️ Closed excess page');
+      }
+    } catch (error) {
+      console.warn('⚠️ Error returning page to pool:', error.message);
+      try {
+        await page.close();
+      } catch (closeError) {
+        // Ignore close errors
+      }
+    }
+  }
+
+  async cleanup() {
+    this.isShuttingDown = true;
+
+    // Close all pages in pool
+    for (const page of this.pagePool) {
+      try {
+        if (!page.isClosed()) {
+          await page.close();
+        }
+      } catch (error) {
+        console.warn('⚠️ Error closing pooled page:', error.message);
+      }
+    }
+    this.pagePool = [];
+
+    // Close browser
+    if (this.browser) {
+      try {
+        await this.browser.close();
+      } catch (error) {
+        console.warn('⚠️ Error closing browser:', error.message);
+      }
+      this.browser = null;
+    }
+
+    console.log('🧹 VideoRenderer cleanup completed');
   }
 
   async renderVideo(projectData, renderId, renderJobs) {
     let page = null;
-    
+    const performanceMetrics = {
+      startTime: Date.now(),
+      browserInitTime: 0,
+      htmlGenerationTime: 0,
+      framesCaptureTime: 0,
+      ffmpegTime: 0,
+      totalFrames: 0,
+      avgFrameTime: 0
+    };
+
     try {
-      console.log(`🎬 Starting Puppeteer render for ${renderId}`);
-      
+      console.log(`🎬 Starting optimized Puppeteer render for ${renderId}`);
+
       // Update progress
-      this.updateProgress(renderJobs, renderId, 10, 'Initializing browser...');
-      
-      page = await this.createPage();
+      this.updateProgress(renderJobs, renderId, 10, 'Getting optimized browser page...');
+
+      const browserStart = Date.now();
+      page = await this.getPage();
+      performanceMetrics.browserInitTime = Date.now() - browserStart;
+      console.log(`⚡ Browser page ready in ${performanceMetrics.browserInitTime}ms`);
       
       // Create React app HTML
+      const htmlStart = Date.now();
       const htmlContent = this.generateReactHTML(projectData);
       const htmlPath = path.join(__dirname, '..', 'storage', 'temp', `${renderId}.html`);
       await fs.writeFile(htmlPath, htmlContent);
+      performanceMetrics.htmlGenerationTime = Date.now() - htmlStart;
+      console.log(`⚡ HTML generated in ${performanceMetrics.htmlGenerationTime}ms`);
       
       // Navigate to the HTML file
       await page.goto(`file://${htmlPath}`, { waitUntil: 'networkidle0' });
@@ -137,111 +282,114 @@ export class VideoRenderer {
       const fps = projectData.fps || 30;
       const duration = this.calculateDuration(projectData);
       const totalFrames = Math.ceil((duration / 1000) * fps);
-      
+      performanceMetrics.totalFrames = totalFrames;
+
       console.log(`📊 Video parameters: ${duration}ms duration, ${fps}fps, ${totalFrames} frames`);
+      console.log(`⚡ Estimated time savings: ~${Math.floor((totalFrames * 175) / 1000)}s -> ~${Math.floor((totalFrames * 50) / 1000)}s`);
       
       // Create frames directory
       const framesDir = path.join(__dirname, '..', 'storage', 'temp', `frames_${renderId}`);
       await fs.ensureDir(framesDir);
       
-      // Capture frames with optimized timing for smooth video
+      // Optimized sequential frame capture with minimal wait times
+      const framesStart = Date.now();
       for (let frame = 0; frame < totalFrames; frame++) {
+        const frameStart = Date.now();
         // Use precise frame timing for smooth playback
-        const timeMs = Math.round((frame / fps) * 1000 * 100) / 100; // Round to 2 decimal places
+        const timeMs = Math.round((frame / fps) * 1000 * 100) / 100;
 
-        // Set current frame time with improved synchronization
+        // Set current frame time with optimized synchronization
         await page.evaluate((time) => {
           if (window.setFrame) {
             window.setFrame(time);
           }
 
-          // Enhanced frame synchronization for smoother video
+          // Optimized frame synchronization - single RAF is sufficient
           return new Promise(resolve => {
-            // Wait for multiple animation frames to ensure stability
             window.requestAnimationFrame(() => {
-              window.requestAnimationFrame(() => {
-                window.requestAnimationFrame(() => {
-                  // Force layout recalculation
-                  document.body.offsetHeight;
-                  resolve();
-                });
-              });
+              // Force layout recalculation only once
+              document.body.offsetHeight;
+              resolve();
             });
           });
         }, timeMs);
 
-        // For the first frame, give extra time to ensure video is properly loaded
+        // Minimal wait times for faster processing
         if (frame === 0) {
-          await page.waitForTimeout(200); // Extra wait for first frame
+          await page.waitForTimeout(100); // Reduced from 200ms to 100ms for first frame
         } else {
-          await page.waitForTimeout(50); // Normal wait for other frames
+          await page.waitForTimeout(16); // Reduced to ~1 frame time at 60fps for subsequent frames
         }
 
-        // Optimized waiting for smoother video rendering
-        await page.waitForTimeout(50); // Reduced from 200ms to 50ms
-
-        // Wait for media elements to be ready and videos to seek properly
+        // Optimized media element synchronization with timeout race
         await page.evaluate(() => {
-          return Promise.all([
-            // Wait for images to load
-            ...Array.from(document.querySelectorAll('img')).map(img => {
-              if (img.complete) return Promise.resolve();
-              return new Promise(resolve => {
-                img.onload = resolve;
-                img.onerror = resolve;
-                setTimeout(resolve, 500);
-              });
-            }),
-            // Wait for videos to be ready and properly seeked
-            ...Array.from(document.querySelectorAll('video')).map(video => {
-              return new Promise(resolve => {
-                const targetTime = parseFloat(video.dataset.targetTime || '0');
+          return Promise.race([
+            // Race condition: either all media loads or timeout
+            Promise.all([
+              // Optimized image loading check
+              ...Array.from(document.querySelectorAll('img')).map(img => {
+                if (img.complete) return Promise.resolve();
+                return new Promise(resolve => {
+                  img.onload = resolve;
+                  img.onerror = resolve;
+                  setTimeout(resolve, 200); // Reduced timeout
+                });
+              }),
+              // Optimized video seeking
+              ...Array.from(document.querySelectorAll('video')).map(video => {
+                return new Promise(resolve => {
+                  const targetTime = parseFloat(video.dataset.targetTime || '0');
 
-                // Check if video is ready and at the correct time
-                const isReady = video.readyState >= 2; // HAVE_CURRENT_DATA
-                const isAtCorrectTime = Math.abs(video.currentTime - targetTime) < 0.1;
+                  // Check if video is ready and at the correct time
+                  const isReady = video.readyState >= 2; // HAVE_CURRENT_DATA
+                  const isAtCorrectTime = Math.abs(video.currentTime - targetTime) < 0.1;
 
-                if (isReady && isAtCorrectTime) {
-                  resolve();
-                  return;
-                }
+                  if (isReady && isAtCorrectTime) {
+                    resolve();
+                    return;
+                  }
 
-                // Wait for video to seek to correct time
-                const onSeeked = () => {
-                  video.removeEventListener('seeked', onSeeked);
-                  video.removeEventListener('loadeddata', onLoadedData);
-                  resolve();
-                };
-
-                const onLoadedData = () => {
-                  if (video.readyState >= 2) {
+                  // Optimized event handling
+                  const cleanup = () => {
                     video.removeEventListener('seeked', onSeeked);
                     video.removeEventListener('loadeddata', onLoadedData);
+                  };
+
+                  const onSeeked = () => {
+                    cleanup();
                     resolve();
+                  };
+
+                  const onLoadedData = () => {
+                    if (video.readyState >= 2) {
+                      cleanup();
+                      resolve();
+                    }
+                  };
+
+                  video.addEventListener('seeked', onSeeked);
+                  video.addEventListener('loadeddata', onLoadedData);
+
+                  // Force seek if needed
+                  if (Math.abs(video.currentTime - targetTime) > 0.1) {
+                    video.currentTime = targetTime;
                   }
-                };
 
-                video.addEventListener('seeked', onSeeked);
-                video.addEventListener('loadeddata', onLoadedData);
-
-                // Force seek if needed
-                if (Math.abs(video.currentTime - targetTime) > 0.1) {
-                  video.currentTime = targetTime;
-                }
-
-                // Timeout fallback
-                setTimeout(() => {
-                  video.removeEventListener('seeked', onSeeked);
-                  video.removeEventListener('loadeddata', onLoadedData);
-                  resolve();
-                }, 1000);
-              });
-            })
+                  // Shorter timeout fallback
+                  setTimeout(() => {
+                    cleanup();
+                    resolve();
+                  }, 300); // Reduced from 1000ms to 300ms
+                });
+              })
+            ]),
+            // Global timeout for all media - prevents hanging
+            new Promise(resolve => setTimeout(resolve, 400))
           ]);
         });
 
-        // Minimal additional wait for final rendering
-        await page.waitForTimeout(25); // Reduced from 100ms to 25ms
+        // Minimal final wait
+        await page.waitForTimeout(8); // Reduced from 25ms to 8ms
 
         // Capture screenshot with optimized settings for smooth video
         const framePath = path.join(framesDir, `${frame.toString().padStart(6, '0')}.png`);
@@ -260,34 +408,57 @@ export class VideoRenderer {
           captureBeyondViewport: false // Ensure consistent framing
         });
 
-        // Update progress
+        // Update progress and track frame timing
+        const frameTime = Date.now() - frameStart;
         const progress = 20 + Math.floor((frame / totalFrames) * 60);
-        this.updateProgress(renderJobs, renderId, progress, `Capturing frame ${frame + 1}/${totalFrames}`);
+        this.updateProgress(renderJobs, renderId, progress, `Capturing frame ${frame + 1}/${totalFrames} (${frameTime}ms)`);
+
+        // Log performance for first few frames
+        if (frame < 5) {
+          console.log(`⚡ Frame ${frame + 1} captured in ${frameTime}ms`);
+        }
       }
+
+      performanceMetrics.framesCaptureTime = Date.now() - framesStart;
+      performanceMetrics.avgFrameTime = performanceMetrics.framesCaptureTime / totalFrames;
+      console.log(`⚡ All ${totalFrames} frames captured in ${performanceMetrics.framesCaptureTime}ms (avg: ${Math.round(performanceMetrics.avgFrameTime)}ms/frame)`);
       
       this.updateProgress(renderJobs, renderId, 80, 'Frames captured, generating video...');
-      
+
       // Generate video with FFmpeg
+      const ffmpegStart = Date.now();
       const outputPath = await this.generateVideoWithFFmpeg(
-        framesDir, 
-        projectData, 
-        renderId, 
-        fps, 
+        framesDir,
+        projectData,
+        renderId,
+        fps,
         renderJobs
       );
+      performanceMetrics.ffmpegTime = Date.now() - ffmpegStart;
+      console.log(`⚡ FFmpeg processing completed in ${performanceMetrics.ffmpegTime}ms`);
       
       // Cleanup
       await fs.remove(framesDir);
       await fs.remove(htmlPath);
-      
+
+      // Log final performance metrics
+      const totalTime = Date.now() - performanceMetrics.startTime;
+      console.log(`🎯 PERFORMANCE SUMMARY for ${renderId}:`);
+      console.log(`   Total time: ${totalTime}ms (${Math.round(totalTime/1000)}s)`);
+      console.log(`   Browser init: ${performanceMetrics.browserInitTime}ms`);
+      console.log(`   HTML generation: ${performanceMetrics.htmlGenerationTime}ms`);
+      console.log(`   Frame capture: ${performanceMetrics.framesCaptureTime}ms (${Math.round(performanceMetrics.avgFrameTime)}ms/frame)`);
+      console.log(`   FFmpeg processing: ${performanceMetrics.ffmpegTime}ms`);
+      console.log(`   Frames per second: ${Math.round(performanceMetrics.totalFrames / (totalTime / 1000))} fps processing rate`);
+
       return outputPath;
-      
+
     } catch (error) {
       console.error(`❌ Render error for ${renderId}:`, error);
       throw error;
     } finally {
       if (page) {
-        await page.close();
+        await this.returnPage(page);
       }
     }
   }
@@ -903,27 +1074,28 @@ export class VideoRenderer {
 
         console.log(`🎬 Starting FFmpeg with ${videoDurationSeconds}s duration`);
 
-        // Create FFmpeg command for video with optimized settings for smoothness
+        // Create optimized FFmpeg command for faster processing
         let command = ffmpeg()
           .input(path.join(framesDir, '%06d.png'))
           .inputFPS(fps)
           .videoCodec('libx264')
           .outputOptions([
             '-pix_fmt yuv420p',
-            '-preset medium', // Better quality than 'fast'
-            '-crf 18', // Higher quality (lower CRF = better quality)
+            '-preset faster', // Faster encoding while maintaining good quality
+            '-crf 20', // Slightly lower quality for faster encoding (was 18)
             '-movflags +faststart', // Optimize for web playback
             '-profile:v high', // H.264 high profile for better compression
             '-level 4.0', // H.264 level for compatibility
             '-bf 2', // B-frames for better compression
-            '-g ' + (fps * 2), // GOP size (keyframe interval)
-            '-keyint_min ' + fps, // Minimum keyframe interval
+            '-g ' + fps, // Smaller GOP size for faster seeking (was fps * 2)
+            '-keyint_min ' + Math.floor(fps / 2), // Reduced minimum keyframe interval
             '-sc_threshold 0', // Disable scene change detection
-            '-force_key_frames expr:gte(t,n_forced*2)', // Force keyframes every 2 seconds
             '-vsync cfr', // Constant frame rate for smooth playback
             '-r ' + fps, // Explicit output frame rate
             '-fflags +genpts', // Generate presentation timestamps
-            '-avoid_negative_ts make_zero' // Handle timestamp issues
+            '-avoid_negative_ts make_zero', // Handle timestamp issues
+            '-threads 0', // Use all available CPU cores
+            '-tune fastdecode' // Optimize for fast decoding
           ])
           .fps(fps);
 
@@ -979,7 +1151,7 @@ export class VideoRenderer {
             const trim = firstAudioSource.trim || {};
 
             const startTime = (timing.from || 0) / 1000;
-            const endTime = (timing.to || duration) / 1000;
+            // const endTime = (timing.to || duration) / 1000; // Not currently used
 
             console.log(`🎵 ${firstAudioSource.type} properties: volume=${volume}, startTime=${startTime}s`);
             console.log(`🎵 Trim settings: from=${trim.from || 0}ms, to=${trim.to || 'end'}`);

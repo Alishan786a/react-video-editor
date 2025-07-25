@@ -96,6 +96,23 @@ const upload = multer({
 // In-memory job tracking
 const renderJobs = new Map();
 
+// Global video renderer instance for reuse
+let globalRenderer = null;
+
+// Cleanup function
+const cleanup = async () => {
+  console.log('🧹 Shutting down server...');
+  if (globalRenderer) {
+    await globalRenderer.cleanup();
+    globalRenderer = null;
+  }
+  process.exit(0);
+};
+
+// Handle graceful shutdown
+process.on('SIGINT', cleanup);
+process.on('SIGTERM', cleanup);
+
 // Health check endpoints
 app.get('/api/v1/editor/render/health', (req, res) => {
   res.json({
@@ -411,9 +428,11 @@ app.post('/api/v1/editor/render', async (req, res) => {
       projectData
     });
 
-    // Start rendering process asynchronously
-    const renderer = new VideoRenderer();
-    renderer.renderVideo(projectData, renderId, renderJobs)
+    // Start rendering process asynchronously with global renderer
+    if (!globalRenderer) {
+      globalRenderer = new VideoRenderer();
+    }
+    globalRenderer.renderVideo(projectData, renderId, renderJobs)
       .then((outputPath) => {
         console.log(`✅ Render ${renderId} completed: ${outputPath}`);
         renderJobs.set(renderId, {
