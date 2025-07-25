@@ -870,15 +870,25 @@ export class VideoRenderer {
   }
 
   calculateDuration(projectData) {
+    // First, check if maxTime is explicitly provided in the payload
+    if (projectData.maxTime && projectData.maxTime > 0) {
+      console.log(`📏 Using explicit maxTime from payload: ${projectData.maxTime}ms`);
+      return projectData.maxTime;
+    }
+
+    // Otherwise, calculate from track items
     let maxDuration = 5000; // Default 5 seconds
-    
+
     projectData.trackItemIds.forEach(itemId => {
-      const item = projectData.trackItemDetailsMap[itemId];
+      // Look in trackItemsMap for display timing, not trackItemDetailsMap
+      const item = projectData.trackItemsMap[itemId];
       if (item && item.display && item.display.to) {
         maxDuration = Math.max(maxDuration, item.display.to);
+        console.log(`📏 Item ${itemId} duration: ${item.display.to}ms`);
       }
     });
-    
+
+    console.log(`📏 Calculated total duration: ${maxDuration}ms`);
     return maxDuration;
   }
 
