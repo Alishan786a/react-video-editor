@@ -669,48 +669,55 @@ export class VideoRenderer {
                     element.style.textTransform = details.textTransform;
                 }
 
-                // Text stroke (border for text) - Use multiple approaches for better compatibility
-                // Frontend uses WebkitTextStroke, but for thick strokes we need alternative methods
+                // Text stroke (border for text) - Create smooth stroke using circular text-shadow pattern
                 if (details.borderWidth && details.borderWidth > 0) {
-                    const strokeWidth = details.borderWidth;
+                    const originalStrokeWidth = details.borderWidth;
                     const strokeColor = details.borderColor || '#000000';
 
-                    if (strokeWidth <= 5) {
-                        // For thin strokes, use WebKit text stroke (works well)
-                        element.style.webkitTextStroke = strokeWidth + 'px ' + strokeColor;
-                        element.style.paintOrder = 'stroke fill';
-                    } else {
-                        // For thick strokes, use multiple text-shadow to create outline effect
-                        // This prevents the stroke from overwhelming the text fill
-                        const shadows = [];
-                        const steps = Math.ceil(strokeWidth / 2); // Number of shadow layers
+                    // Adjust stroke width to match WebkitTextStroke appearance
+                    // text-shadow typically appears ~60% thicker than WebkitTextStroke
+                    const adjustedStrokeWidth = originalStrokeWidth * 0.6;
 
-                        // Create multiple shadows in a circle pattern
-                        for (let i = 1; i <= steps; i++) {
-                            const radius = i * 2;
-                            // 8 directions for smooth outline
-                            shadows.push(radius + 'px 0px 0px ' + strokeColor); // right
-                            shadows.push('-' + radius + 'px 0px 0px ' + strokeColor); // left
-                            shadows.push('0px ' + radius + 'px 0px ' + strokeColor); // bottom
-                            shadows.push('0px -' + radius + 'px 0px ' + strokeColor); // top
-                            shadows.push(radius + 'px ' + radius + 'px 0px ' + strokeColor); // bottom-right
-                            shadows.push('-' + radius + 'px ' + radius + 'px 0px ' + strokeColor); // bottom-left
-                            shadows.push(radius + 'px -' + radius + 'px 0px ' + strokeColor); // top-right
-                            shadows.push('-' + radius + 'px -' + radius + 'px 0px ' + strokeColor); // top-left
-                        }
+                    // Create smooth circular stroke using many text-shadow positions
+                    const shadows = [];
+                    const steps = Math.max(8, originalStrokeWidth * 4); // More steps for smoother stroke
 
-                        element.style.textShadow = shadows.join(', ');
-                        console.log('🔲 Applied thick stroke using text-shadow method: ' + strokeWidth + 'px ' + strokeColor);
+                    for (let i = 0; i < steps; i++) {
+                        const angle = (i * 2 * Math.PI) / steps;
+                        const x = Math.cos(angle) * adjustedStrokeWidth;
+                        const y = Math.sin(angle) * adjustedStrokeWidth;
+                        shadows.push(x.toFixed(2) + 'px ' + y.toFixed(2) + 'px 0px ' + strokeColor);
                     }
+
+                    element.style.textShadow = shadows.join(', ');
+                    console.log('🔲 Applied smooth stroke: ' + originalStrokeWidth + 'px -> ' + adjustedStrokeWidth.toFixed(2) + 'px (' + steps + ' shadows)');
 
                     // Ensure text color is properly set and visible
                     element.style.color = details.color || '#ffffff';
 
                 } else if (details.WebkitTextStrokeWidth && details.WebkitTextStrokeWidth !== '0px') {
-                    // Fallback to individual properties if needed
-                    element.style.webkitTextStrokeWidth = details.WebkitTextStrokeWidth;
-                    element.style.webkitTextStrokeColor = details.WebkitTextStrokeColor || '#000000';
-                    element.style.paintOrder = 'stroke fill';
+                    // Fallback: Convert WebkitTextStroke to smooth circular text-shadow
+                    const originalStrokeWidth = parseFloat(details.WebkitTextStrokeWidth);
+                    const strokeColor = details.WebkitTextStrokeColor || '#000000';
+
+                    if (originalStrokeWidth > 0) {
+                        // Adjust stroke width to match WebkitTextStroke appearance
+                        const adjustedStrokeWidth = originalStrokeWidth * 0.6;
+
+                        const shadows = [];
+                        const steps = Math.max(8, originalStrokeWidth * 4); // More steps for smoother stroke
+
+                        for (let i = 0; i < steps; i++) {
+                            const angle = (i * 2 * Math.PI) / steps;
+                            const x = Math.cos(angle) * adjustedStrokeWidth;
+                            const y = Math.sin(angle) * adjustedStrokeWidth;
+                            shadows.push(x.toFixed(2) + 'px ' + y.toFixed(2) + 'px 0px ' + strokeColor);
+                        }
+
+                        element.style.textShadow = shadows.join(', ');
+                        console.log('🔲 Applied fallback smooth stroke: ' + originalStrokeWidth + 'px -> ' + adjustedStrokeWidth.toFixed(2) + 'px (' + steps + ' shadows)');
+                    }
+
                     element.style.color = details.color || '#ffffff';
                 }
 
